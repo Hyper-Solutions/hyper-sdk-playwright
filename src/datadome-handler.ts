@@ -4,8 +4,8 @@ import { generateSliderPayload, SliderInput } from "hyper-sdk-js/datadome/slider
 
 export interface DataDomeHandlerConfig {
     session: Session;
+    ipAddress: string;
     userAgent?: string;
-    ipAddress?: string;
     acceptLanguage?: string;
 }
 
@@ -46,8 +46,8 @@ export class DataDomeHandler {
 
     constructor(config: DataDomeHandlerConfig) {
         this.session = config.session;
+        this.ipAddress = config.ipAddress;
         this.userAgent = config.userAgent || '';
-        this.ipAddress = config.ipAddress || '193.32.249.165';
         this.acceptLanguage = config.acceptLanguage || 'en-US,en;q=0.9';
 
         this.imagesPromise = new Promise((resolve) => {

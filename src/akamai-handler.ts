@@ -7,8 +7,8 @@ import {Route} from "@playwright/test";
 
 export interface AkamaiHandlerConfig {
     session: Session;
+    ipAddress: string;
     userAgent?: string;
-    ipAddress?: string;
     acceptLanguage?: string;
 }
 
@@ -43,8 +43,8 @@ export class AkamaiHandler {
 
     constructor(config: AkamaiHandlerConfig) {
         this.session = config.session;
+        this.ipAddress = config.ipAddress;
         this.userAgent = config.userAgent || '';
-        this.ipAddress = config.ipAddress || '193.32.249.165';
         this.acceptLanguage = config.acceptLanguage || 'en-US,en;q=0.9';
 
         this.dynamicValuesPromise = new Promise((resolve) => {
@@ -92,6 +92,9 @@ export class AkamaiHandler {
         this.scriptCapture.scriptUrl = requestUrl;
         console.log(`[AkamaiHandler] Captured sensor script URL: ${requestUrl}`);
 
+        // Reset context because we're working with a newly loaded script
+        this.sessionContext = "";
+
         const buffer = await response.body();
         const responseText = buffer.toString('utf-8');
         this.scriptCapture.dynamicValues = await parseV3DynamicValues(
@@ -124,6 +127,8 @@ export class AkamaiHandler {
             // Save response text for payload generation
             const buffer = await response.body();
             this.scriptCapture.sbsdResponseText = buffer.toString('utf-8');
+            // Reset index because we're working with a new sbsd script
+            this.sbsdIndex = 0;
             console.log('[AkamaiHandler] SBSD response text saved');
         }
     }
@@ -132,7 +137,7 @@ export class AkamaiHandler {
      * Set up request interceptor to replace sensor data
      */
     private async setupRequestInterceptor(page: Page, context: BrowserContext): Promise<void> {
-        // Regex pattern for sensor scripts like: https://www.united.com/CKo1/13Fb/v_Lq/cYPX7Q/EiOLQt3r3zrVh4t9/aG4BHUZtAQ/Li/gIKUZfMA0B
+        // Regex pattern for sensor scripts like: https://www.example.com/CKo1/13Fb/v_Lq/cYPX7Q/EiOLQt3r3zrVh4t9/aG4BHUZtAQ/Li/gIKUZfMA0B
         const sensorScriptRegex = /^https?:\/\/[^\/]+\/[a-zA-Z\d\/\-_]+$/i;
 
         await page.route(sensorScriptRegex, async (route) => {
@@ -154,7 +159,7 @@ export class AkamaiHandler {
             }
         });
 
-        // Regex pattern for SBSD scripts like: https://www.united.com/path/script.js?v=12345678-1234-1234-1234-123456789012
+        // Regex pattern for SBSD scripts like: https://www.example.com/path/script.js?v=12345678-1234-1234-1234-123456789012
         const sbsdScriptRegex = /^https?:\/\/[^\/]+\/[a-zA-Z\d\/\-_\.]+\?v=[a-f\d\-]{36}/i;
 
         await page.route(sbsdScriptRegex, async (route) => {
@@ -281,7 +286,7 @@ export class AkamaiHandler {
         console.log('[AkamaiHandler] Intercepting SBSD POST request');
 
         const cookies = await context.cookies();
-        const bmso = cookies.find(c => c.name === 'bm_so')?.value;
+        const bmso = cookies.find(c => c.name === "sbsd_o" || c.name === 'bm_so')?.value;
 
         if (!bmso || !this.scriptCapture.sbsdResponseText || !this.scriptCapture.sbsdUuid) {
             console.log('[AkamaiHandler] Missing required cookie or SBSD data, continuing with original request');
@@ -295,9 +300,18 @@ export class AkamaiHandler {
             this.userAgent = await page.evaluate(() => navigator.userAgent);
         }
 
+        // Check if the request URL has a 't' parameter
+        const requestUrl = new URL(route.request().url());
+        const hasTimeParameter = requestUrl.searchParams.has('t');
+
+        // Use sbsdIndex 0 if 't' parameter exists, otherwise use current sbsdIndex
+        const indexToUse = hasTimeParameter ? 0 : this.sbsdIndex;
+
+        console.log(`[AkamaiHandler] Using SBSD index: ${indexToUse} (t parameter: ${hasTimeParameter})`);
+
         // Generate SBSD payload using SDK
         const result = await generateSbsdPayload(this.session, new SbsdInput(
-            this.sbsdIndex,
+            indexToUse,
             this.scriptCapture.sbsdUuid,
             bmso,
             page.url(),

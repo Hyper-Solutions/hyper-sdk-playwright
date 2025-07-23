@@ -5,8 +5,8 @@ import {generateKasadaPayload, KasadaPayloadInput} from "hyper-sdk-js/kasada/pay
 
 export interface KasadaHandlerConfig {
     session: Session;
+    ipAddress: string;
     userAgent?: string;
-    ipAddress?: string;
     acceptLanguage?: string;
 }
 
@@ -35,8 +35,8 @@ export class KasadaHandler {
 
     constructor(config: KasadaHandlerConfig) {
         this.session = config.session;
+        this.ipAddress = config.ipAddress;
         this.userAgent = config.userAgent || '';
-        this.ipAddress = config.ipAddress || '193.32.249.165';
         this.acceptLanguage = config.acceptLanguage || 'en-US,en;q=0.9';
 
         this.ipsScriptPromise = new Promise((resolve) => {

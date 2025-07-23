@@ -5,8 +5,8 @@ import { generateReese84Sensor, Reese84Input } from "hyper-sdk-js/incapsula/rees
 
 export interface IncapsulaHandlerConfig {
     session: Session;
+    ipAddress: string;
     userAgent?: string;
-    ipAddress?: string;
     acceptLanguage?: string;
     scriptPathToSitekey: Map<string, string>;
 }
@@ -34,8 +34,8 @@ export class IncapsulaHandler {
 
     constructor(config: IncapsulaHandlerConfig) {
         this.session = config.session;
+        this.ipAddress = config.ipAddress;
         this.userAgent = config.userAgent || '';
-        this.ipAddress = config.ipAddress || '193.32.249.165';
         this.acceptLanguage = config.acceptLanguage || 'en-US,en;q=0.9';
         this.scriptPathToSitekey = config.scriptPathToSitekey;
     }
