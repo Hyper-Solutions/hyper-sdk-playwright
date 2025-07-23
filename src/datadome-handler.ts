@@ -1,6 +1,7 @@
 import { Page, BrowserContext } from 'playwright';
 import { Session } from 'hyper-sdk-js';
 import { generateSliderPayload, SliderInput } from "hyper-sdk-js/datadome/slider";
+import {Frame} from "@playwright/test";
 
 export interface DataDomeHandlerConfig {
     session: Session;
@@ -186,6 +187,17 @@ export class DataDomeHandler {
                 this.userAgent = await page.evaluate(() => navigator.userAgent);
             }
 
+            // Find the captcha iframe
+            const captchaFrame = page.frames().find(frame =>
+                frame.url().includes('captcha-delivery.com')
+            );
+
+            if (!captchaFrame) {
+                throw new Error('Could not find captcha iframe');
+            }
+
+            let parentUrl = await captchaFrame.evaluate(() =>  (window.location != window.parent.location) ? document.referrer : document.location.href);
+
             // Generate device check link
             console.log('[DataDomeHandler] Generating device check link...');
 
@@ -195,7 +207,7 @@ export class DataDomeHandler {
                 await response.text(),
                 this.captchaCapture.puzzleImageBase64,
                 this.captchaCapture.pieceImageBase64,
-                "https://tickets.manutd.com/", // TODO: proper parent url input
+                parentUrl,
                 this.ipAddress,
                 this.acceptLanguage,
             ));
@@ -210,7 +222,7 @@ export class DataDomeHandler {
             this.captchaCapture.deviceCheckLink = sliderResult.payload;
 
             // Execute solution in the iframe
-            await this.executeSolutionInIframe(captchaPage, sliderResult.payload);
+            await this.executeSolutionInIframe(captchaFrame, sliderResult.payload);
             console.log('[DataDomeHandler] Captcha solution executed successfully');
 
             // Override extra headers
@@ -262,132 +274,68 @@ export class DataDomeHandler {
     /**
      * Execute the solution in the captcha iframe
      */
-    private async executeSolutionInIframe(page: Page, deviceCheckLink: string): Promise<void> {
+    private async executeSolutionInIframe(captchaFrame: Frame, deviceCheckLink: string): Promise<void> {
         try {
-            // Find the captcha iframe
-            const captchaFrame = page.frames().find(frame =>
-                frame.url().includes('captcha-delivery.com')
-            );
-
-            if (!captchaFrame) {
-                throw new Error('Could not find captcha iframe');
-            }
-
-            // Override the captchaCallback function to use our generated device check link
+            // This is inspired from window.captchaCallback function that dd uses to communicate with the c.js script
+            // which is responsible for redirecting back to the site after solving slider.
             await captchaFrame.evaluate((generatedDeviceCheckLink) => {
-                window.captchaCallback = function() {
-                    var cid = ddm.cid;
-                    var hash = ddm.hash;
+                // Extract cid and referer from the device check link
+                const url = new URL(generatedDeviceCheckLink);
+                const refererParam = url.searchParams.get('referer');
 
-                    if (window.ga && ga.create) {
-                        ga('send', 'event', 'Challenge', 'Access to website', 'JSKey: ' + hash + ' - ClientId: ' + cid);
-                    }
+                var request = new XMLHttpRequest();
+                request.open('GET', generatedDeviceCheckLink, true);
+                request.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
 
-                    var re = new RegExp("datadome=([^;]+)");
-                    var value = re.exec(document.cookie);
-                    var ccid = (value != null) ? unescape(value[1]) : null;
-
-                    var parentFrameUrl = (window.location != window.parent.location) ? document.referrer : document.location.href;
-
-                    // ONLY MODIFICATION: Use our generated device check link instead of building captcha check URL
-                    var request = new XMLHttpRequest();
-                    request.open('GET', generatedDeviceCheckLink, true);
-                    request.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-
-                    request.onload = function() {
-                        if (this.status >= 200 && this.status < 400) {
-                            // Track captcha passed
-                            var element = document.getElementById('analyticsCaptchaPassed');
-                            if (element) {
-                                element.setAttribute('data-analytics-captcha-passed', 'true');
-                            }
-
-                            var cookie = cid;
-                            var reloadHref = ddm.referer;
-
-                            if (window.parent && window.parent.postMessage && this.responseText !== undefined) {
-                                var json = JSON.parse(this.responseText);
-                                if (json.hasOwnProperty('cookie') && json.cookie !== null) {
-                                    cookie = json.cookie;
-                                    var origin = '*';
-                                    // we can't use `window.parent.location.origin` here because access from another origin to `window.parent.location` raises a DOMException
-                                    // except write a new location but it isn't our case.
-                                    // get it from refrerer by hand
-                                    if (document.referrer) {
-                                        var pathArray = document.referrer.split('/');
-                                        // `pathArray[1]` should be empty string if referer contains protocol. use it!
-                                        if (pathArray.length >= 3 && pathArray[1] === '') {
-                                            origin = pathArray[0] + '//' + pathArray[2];
-                                        } else {
-                                            origin = '*';
-                                        }
-
-                                        if(origin === document.location.origin) {
-                                            // In case of XHR's blocked request, after the retry, the origin is lost, we must send
-                                            // the message globally.
-                                            origin = '*';
-                                        }
-                                    }
-
-                                    window.parent.postMessage(JSON.stringify({'cookie': json.cookie, 'url': reloadHref, 'eventType':'passed', 'responseType': 'captcha'}), origin);
-                                }
-                            } else {
-                                // Fallback reload if postMessage does not exists
-                                setTimeout(function () {
-                                    window.top.location.href = reloadHref;
-                                }, 7000);
-                            }
-
-                            // to prevent race condition with postMessage that should setup a cookie
-                            // adds some sleep for refresh logic
-                            setTimeout(function () {
-                                if (window.android
-                                    && window.android.onCaptchaSuccess) {
-                                    window.android.onCaptchaSuccess(cookie);
-                                    return;
-                                }
-                                if (window.webkit
-                                    && window.webkit.messageHandlers
-                                    && window.webkit.messageHandlers.onCaptchaSuccess
-                                    && window.webkit.messageHandlers.onCaptchaSuccess.postMessage) {
-                                    window.webkit.messageHandlers.onCaptchaSuccess.postMessage(cookie);
-                                    return;
-                                }
-                                if (ddm.sdkMsgFormat === 'json') {
-                                    var message = JSON.stringify({'name': 'onChallengeSolved', 'body': {'cookie': cookie}});
-                                    if (window.FlutterWebView && window.FlutterWebView.postMessage) {
-                                        window.FlutterWebView.postMessage(message);
-                                    } else if (window.ReactNativeWebView && ReactNativeWebView.postMessage) {
-                                        window.ReactNativeWebView.postMessage(message);
-                                    } else if (window.webkit
-                                        && window.webkit.messageHandlers
-                                        && window.webkit.messageHandlers.ReactNativeWebView
-                                        && window.webkit.messageHandlers.ReactNativeWebView.postMessage) {
-                                        window.webkit.messageHandlers.ReactNativeWebView.postMessage(message)
-                                    }
-                                } else if (window.ReactNativeWebView
-                                    && window.ReactNativeWebView.postMessage) {
-                                    window.ReactNativeWebView.postMessage(cookie);
-                                } else if (window.webkit
-                                    && window.webkit.messageHandlers
-                                    && window.webkit.messageHandlers.ReactNativeWebView
-                                    && window.webkit.messageHandlers.ReactNativeWebView.postMessage) {
-                                    window.webkit.messageHandlers.ReactNativeWebView.postMessage(cookie)
-                                }
-                            }, 500);
-                        } else {
-                            setTimeout(function () {
-                                // Reload compatible with IE 11
-                                window.location = window.location;
-                            }, 2000);
+                request.onload = function() {
+                    if (this.status >= 200 && this.status < 400) {
+                        // Track captcha passed
+                        var element = document.getElementById('analyticsCaptchaPassed');
+                        if (element) {
+                            element.setAttribute('data-analytics-captcha-passed', 'true');
                         }
-                    };
-                    request.send();
+
+                        var reloadHref = refererParam;
+
+                        if (window.parent && window.parent.postMessage && this.responseText !== undefined) {
+                            var json = JSON.parse(this.responseText);
+                            if (json.hasOwnProperty('cookie') && json.cookie !== null) {
+                                var origin = '*';
+                                // we can't use `window.parent.location.origin` here because access from another origin to `window.parent.location` raises a DOMException
+                                // except write a new location but it isn't our case.
+                                // get it from refrerer by hand
+                                if (document.referrer) {
+                                    var pathArray = document.referrer.split('/');
+                                    // `pathArray[1]` should be empty string if referer contains protocol. use it!
+                                    if (pathArray.length >= 3 && pathArray[1] === '') {
+                                        origin = pathArray[0] + '//' + pathArray[2];
+                                    } else {
+                                        origin = '*';
+                                    }
+
+                                    if(origin === document.location.origin) {
+                                        // In case of XHR's blocked request, after the retry, the origin is lost, we must send
+                                        // the message globally.
+                                        origin = '*';
+                                    }
+                                }
+
+                                window.parent.postMessage(JSON.stringify({'cookie': json.cookie, 'url': reloadHref, 'eventType':'passed', 'responseType': 'captcha'}), origin);
+                            }
+                        } else {
+                            // Fallback reload if postMessage does not exists
+                            setTimeout(function () {
+                                window.top.location.href = reloadHref;
+                            }, 7000);
+                        }
+                    } else {
+                        setTimeout(function () {
+                            // Reload compatible with IE 11
+                            window.location = window.location;
+                        }, 2000);
+                    }
                 };
-
-                // Call the overridden function
-                window.captchaCallback();
-
+                request.send();
             }, deviceCheckLink);
 
         } catch (error) {
