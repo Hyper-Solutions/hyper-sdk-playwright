@@ -1,6 +1,7 @@
 import { Page, BrowserContext } from 'playwright';
 import { Session } from 'hyper-sdk-js';
 import { generateSliderPayload, SliderInput } from "hyper-sdk-js/datadome/slider";
+import { generateInterstitialPayload, InterstitialInput } from "hyper-sdk-js/datadome/interstitial";
 import {Frame} from "@playwright/test";
 
 export interface DataDomeHandlerConfig {
@@ -17,6 +18,8 @@ export interface CaptchaCapture {
     pieceImageBase64: string | null;
     captchaPageUrl: string | null;
     deviceCheckLink: string | null;
+    interstitialPageUrl: string | null;
+    interstitialPageText: string | null;
 }
 
 export class DataDomeHandler {
@@ -32,7 +35,9 @@ export class DataDomeHandler {
         puzzleImageBase64: null,
         pieceImageBase64: null,
         captchaPageUrl: null,
-        deviceCheckLink: null
+        deviceCheckLink: null,
+        interstitialPageUrl: null,
+        interstitialPageText: null
     };
 
     // Processing state
@@ -41,9 +46,6 @@ export class DataDomeHandler {
     // Promise management for images
     private imagesPromise: Promise<void>;
     private resolveImages: (() => void) | null = null;
-
-    // Headers storage for request interception
-    private isHeaderInterceptionEnabled: boolean = false;
 
     constructor(config: DataDomeHandlerConfig) {
         this.session = config.session;
@@ -61,6 +63,50 @@ export class DataDomeHandler {
      */
     public async initialize(page: Page, context: BrowserContext): Promise<void> {
         await this.setupResponseHandler(page);
+        await this.setupRequestInterception(page);
+    }
+
+    /**
+     * Set up request interception for POST requests to interstitial endpoint
+     */
+    private async setupRequestInterception(page: Page): Promise<void> {
+        await page.route('https://geo.captcha-delivery.com/interstitial/', async (route) => {
+            const request = route.request();
+
+            if (request.method() === 'POST') {
+                // Get current user agent if not set
+                if (!this.userAgent) {
+                    this.userAgent = await page.evaluate(() => navigator.userAgent);
+                }
+
+                console.log(request.headers())
+
+
+                const interstitialResult = await generateInterstitialPayload(this.session, new InterstitialInput(
+                    this.userAgent,
+                    this.captchaCapture.interstitialPageUrl,
+                    this.captchaCapture.interstitialPageText,
+                    this.ipAddress,
+                    this.acceptLanguage,
+                ));
+
+                if (!interstitialResult) {
+                    console.error('[DataDomeHandler] Failed to generate interstitial payload');
+                    return;
+                }
+
+                console.log('[DataDomeHandler] Successfully generated interstitial payload');
+
+                await route.continue({
+                    postData: interstitialResult.payload,
+                });
+
+                // Override extra headers
+                await page.setExtraHTTPHeaders(interstitialResult.headers);
+            } else {
+                await route.continue();
+            }
+        });
     }
 
     /**
@@ -89,6 +135,12 @@ export class DataDomeHandler {
                     await this.handleCaptchaPageResponse(response, page);
                     return;
                 }
+
+                // Handle interstitial page response
+                if (this.isInterstitialPageRequest(requestUrl)) {
+                    await this.handleInterstitialPageResponse(response, page);
+                    return;
+                }
             } catch (error) {
                 console.error('[DataDomeHandler] Error in response handler:', error);
             }
@@ -114,6 +166,13 @@ export class DataDomeHandler {
      */
     private isCaptchaPageRequest(requestUrl: string): boolean {
         return requestUrl.includes('geo.captcha-delivery.com/captcha/?initialCid=') && requestUrl.includes('?');
+    }
+
+    /**
+     * Check if this is an interstitial page request
+     */
+    private isInterstitialPageRequest(requestUrl: string): boolean {
+        return requestUrl.includes('geo.captcha-delivery.com/interstitial/?initialCid=') && requestUrl.includes('?');
     }
 
     /**
@@ -235,11 +294,27 @@ export class DataDomeHandler {
     }
 
     /**
-     * Disable header interception
+     * Handle interstitial page response - simplified to just save data
      */
-    public disableHeaderInterception(): void {
-        this.isHeaderInterceptionEnabled = false;
-        console.log('[DataDomeHandler] Header interception disabled');
+    private async handleInterstitialPageResponse(response: any, page: Page): Promise<void> {
+        if (this.isProcessing) return;
+
+        try {
+            this.isProcessing = true;
+
+            // Save the interstitial page URL and response text
+            this.captchaCapture.interstitialPageUrl = response.url();
+            this.captchaCapture.interstitialPageText = await response.text();
+
+            console.log(`[DataDomeHandler] Interstitial page detected: ${response.url()}`);
+            console.log(`[DataDomeHandler] Saved interstitial page text (${this.captchaCapture.interstitialPageText.length} characters)`);
+            console.log('[DataDomeHandler] Interstitial data saved - waiting for POST request interception');
+
+        } catch (error) {
+            console.error('[DataDomeHandler] Error handling interstitial page response:', error);
+        } finally {
+            this.isProcessing = false;
+        }
     }
 
     /**
@@ -346,11 +421,10 @@ export class DataDomeHandler {
     /**
      * Get current capture status
      */
-    public getStatus(): CaptchaCapture & { isProcessing: boolean; isHeaderInterceptionEnabled: boolean } {
+    public getStatus(): CaptchaCapture & { isProcessing: boolean } {
         return {
             ...this.captchaCapture,
             isProcessing: this.isProcessing,
-            isHeaderInterceptionEnabled: this.isHeaderInterceptionEnabled,
         };
     }
 
@@ -364,10 +438,11 @@ export class DataDomeHandler {
             puzzleImageBase64: null,
             pieceImageBase64: null,
             captchaPageUrl: null,
-            deviceCheckLink: null
+            deviceCheckLink: null,
+            interstitialPageUrl: null,
+            interstitialPageText: null
         };
         this.isProcessing = false;
-        this.isHeaderInterceptionEnabled = false;
 
         this.imagesPromise = new Promise((resolve) => {
             this.resolveImages = resolve;
