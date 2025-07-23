@@ -2,6 +2,7 @@ import { Page, BrowserContext } from 'playwright';
 import { Session } from 'hyper-sdk-js';
 import { generateSliderPayload, SliderInput } from "hyper-sdk-js/datadome/slider";
 import { generateInterstitialPayload, InterstitialInput } from "hyper-sdk-js/datadome/interstitial";
+import { generateTagsPayload, TagsInput } from "hyper-sdk-js/datadome/tags";
 import {Frame} from "@playwright/test";
 
 export interface DataDomeHandlerConfig {
@@ -67,9 +68,10 @@ export class DataDomeHandler {
     }
 
     /**
-     * Set up request interception for POST requests to interstitial endpoint
+     * Set up request interception for POST requests to interstitial and js endpoints
      */
     private async setupRequestInterception(page: Page): Promise<void> {
+        // Intercept interstitial endpoint
         await page.route('https://geo.captcha-delivery.com/interstitial/', async (route) => {
             const request = route.request();
 
@@ -78,9 +80,6 @@ export class DataDomeHandler {
                 if (!this.userAgent) {
                     this.userAgent = await page.evaluate(() => navigator.userAgent);
                 }
-
-                console.log(request.headers())
-
 
                 const interstitialResult = await generateInterstitialPayload(this.session, new InterstitialInput(
                     this.userAgent,
@@ -103,6 +102,57 @@ export class DataDomeHandler {
 
                 // Override extra headers
                 await page.setExtraHTTPHeaders(interstitialResult.headers);
+            } else {
+                await route.continue();
+            }
+        });
+
+        // Intercept /js endpoint for tags requests
+        await page.route('**/js', async (route) => {
+            const request = route.request();
+
+            if (request.method() === 'POST') {
+                const postData = request.postData();
+
+                if (postData && postData.includes('ddk')) {
+                    // Get current user agent if not set
+                    if (!this.userAgent) {
+                        this.userAgent = await page.evaluate(() => navigator.userAgent);
+                    }
+
+                    // Parse x-www-form-urlencoded data
+                    const parsedData = new URLSearchParams(postData);
+                    const keyValues: { [key: string]: string } = {};
+
+                    // Extract all key-value pairs
+                    for (const [key, value] of parsedData.entries()) {
+                        keyValues[key] = value;
+                    }
+
+                    const tagsResult = await generateTagsPayload(this.session, new TagsInput(
+                        this.userAgent,
+                        keyValues["cid"],
+                        keyValues["ddk"],
+                        keyValues["Referer"],
+                        keyValues["jsType"],
+                        this.ipAddress,
+                        this.acceptLanguage,
+                        keyValues["ddv"],
+                    ));
+
+                    if (!tagsResult) {
+                        console.error('[DataDomeHandler] Failed to generate tags payload');
+                        return;
+                    }
+
+                    console.log('[DataDomeHandler] Successfully generated tags payload');
+
+                    await route.continue({
+                        postData: tagsResult,
+                    });
+                } else {
+                    await route.continue();
+                }
             } else {
                 await route.continue();
             }
