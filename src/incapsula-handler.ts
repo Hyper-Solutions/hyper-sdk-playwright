@@ -2,6 +2,7 @@ import { Page, BrowserContext } from 'playwright';
 import { Session } from 'hyper-sdk-js';
 import { Route } from "@playwright/test";
 import { generateReese84Sensor, Reese84Input } from "hyper-sdk-js/incapsula/reese";
+import { generateUtmvcCookie, UtmvcInput } from "hyper-sdk-js/incapsula/utmvc";
 
 export interface IncapsulaHandlerConfig {
     session: Session;
@@ -22,6 +23,7 @@ export class IncapsulaHandler {
     private ipAddress: string;
     private acceptLanguage: string;
     private scriptPathToSitekey: Map<string, string>;
+    private utmvc: string;
 
     // Captured data
     private scriptCapture: IncapsulaScriptCapture = {
@@ -52,6 +54,74 @@ export class IncapsulaHandler {
      * Set up request interceptor to handle Incapsula script requests
      */
     private async setupRequestInterceptor(page: Page, context: BrowserContext): Promise<void> {
+        // Intercept Incapsula utmvc requests and abort them after reading response
+        await page.route(/.*\/_Incapsula_Resource\?SWJIYLWA=.*/, async (route) => {
+            const request = route.request();
+            const requestUrl = request.url();
+
+            try {
+                console.log(`[IncapsulaHandler] Intercepting Incapsula utmvc request: ${requestUrl}`);
+
+                // Get the response first
+                const response = await route.fetch();
+                const responseBody = await response.text();
+
+                // Get current user agent if not set
+                if (!this.userAgent) {
+                    this.userAgent = await page.evaluate(() => navigator.userAgent);
+                }
+
+                // Get all cookies for the current page/domain
+                const allCookies = await context.cookies();
+
+                // Filter cookies that start with "incap_ses_"
+                const incapCookies = allCookies.filter(cookie => cookie.name.startsWith('incap_ses_'));
+
+                // Extract just the values
+                const sessionIds = incapCookies.map(cookie => cookie.value);
+
+                const result = await generateUtmvcCookie(this.session, new UtmvcInput(
+                    this.userAgent,
+                    responseBody,
+                    sessionIds,
+                ))
+                this.utmvc = result.payload;
+
+                // Inject the cookie interception code with our generated utmvc value
+                await page.evaluate(`
+    (function(utmvcValue) {
+        const originalCookieDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie');
+        let intercepted = false;
+
+        Object.defineProperty(document, 'cookie', {
+            set: function(value) {
+                if (!intercepted && value.includes('___utmvc=')) {
+                    console.log('[IncapsulaHandler] Intercepting ___utmvc cookie:', value);
+                    const modifiedValue = value.replace(/___utmvc=([^;]+)/, \`___utmvc=\${utmvcValue}\`);
+                    console.log('[IncapsulaHandler] Modified ___utmvc cookie:', modifiedValue);
+                    originalCookieDescriptor.set.call(this, modifiedValue);
+                    intercepted = true;
+                    Object.defineProperty(document, 'cookie', originalCookieDescriptor);
+                    console.log('[IncapsulaHandler] Cookie interception completed and original behavior restored');
+                } else {
+                    originalCookieDescriptor.set.call(this, value);
+                }
+            },
+            get: originalCookieDescriptor.get
+        });
+        console.log('[IncapsulaHandler] Cookie interception injected and ready');
+    })("${this.utmvc}");
+`);
+
+                console.log(`[IncapsulaHandler] Read Incapsula utmvc response (${responseBody.length} chars)`);
+
+                await route.continue();
+            } catch (error) {
+                console.error('Error intercepting Incapsula utmvc request:', error);
+                await route.continue();
+            }
+        });
+
         // Use a single broad pattern to catch all potential Incapsula requests
         // Then do specific path matching inside the handler
         await page.route(/.*\?.*d=.*/, async (route) => {
