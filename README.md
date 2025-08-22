@@ -1,28 +1,41 @@
-# hyper-sdk-playwright
+# Hyper Solutions Playwright SDK - Automated Bot Protection Bypass for Akamai, DataDome, Incapsula, Kasada
 
-A Playwright extension that provides automated solving capabilities for major bot protection systems including Akamai, DataDome, Incapsula, and Kasada.
+![Node Version](https://img.shields.io/badge/Node.js-16+-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![NPM Version](https://img.shields.io/npm/v/hyper-sdk-playwright)
+![NPM Downloads](https://img.shields.io/npm/dm/hyper-sdk-playwright)
 
-## Features
+[![](https://dcbadge.limes.pink/api/server/akamai)](https://discord.gg/akamai)
 
-- **Akamai Bot Manager** - Automated sensor data generation and challenge solving
-- **DataDome** - Complete bot detection bypass with real-time challenge handling
-- **Incapsula** - Dynamic script interception and token generation
-- **Kasada** - IPS script handling and TL endpoint management
-- **Seamless Integration** - Drop-in handlers that work with existing Playwright code
+A powerful **Playwright extension** that provides automated solving capabilities for major bot protection systems including **Akamai Bot Manager**, **DataDome**, **Incapsula**, and **Kasada**. Seamlessly integrate bot protection bypass into your Playwright automation workflows.
 
-## Installation
+Perfect for **web scraping**, **automation testing**, **monitoring**, and **data collection** from protected websites.
+
+## ✨ Features
+
+- 🛡️ **Akamai Bot Manager** - Automated sensor data generation and challenge solving
+- 🎯 **DataDome** - Complete bot detection bypass with real-time challenge handling
+- 🔒 **Incapsula** - Dynamic script interception and token generation
+- ⚡ **Kasada** - IPS script handling and TL endpoint management
+- 🔧 **Seamless Integration** - Drop-in handlers that work with existing Playwright code
+- 🚀 **Zero Configuration** - Automatic detection and handling of bot protection systems
+
+## 📦 Installation
+
+Install the Playwright SDK and its dependencies:
 
 ```bash
 npm install hyper-sdk-playwright hyper-sdk-js playwright
 ```
 
-## Prerequisites
+## 📋 Prerequisites
 
 - Playwright installed and configured
 - Valid Hyper SDK API key
 - Chrome/Chromium browser
+- Node.js 16+ environment
 
-## Quick Start
+## 🚀 Quick Start
 
 ```javascript
 import { chromium } from 'playwright';
@@ -94,9 +107,22 @@ async function main() {
 main().catch(console.error);
 ```
 
-## Handler Configuration
+## 📋 Table of Contents
 
-### AkamaiHandler
+- [Quick Start](#-quick-start)
+- [Installation](#-installation)
+- [Handler Configuration](#-handler-configuration)
+- [Best Practices](#-best-practices)
+- [Troubleshooting](#-troubleshooting)
+- [API Reference](#-api-reference)
+- [Support](#-support)
+
+## 🔧 Handler Configuration
+
+### AkamaiHandler - Bypass Akamai Bot Manager
+
+Automatically handles **Akamai sensor generation**, **pixel challenges**, and **sec-cpt verification**:
+
 ```javascript
 const akamaiHandler = new AkamaiHandler({
     session: session,           // Hyper SDK session
@@ -105,7 +131,10 @@ const akamaiHandler = new AkamaiHandler({
 });
 ```
 
-### DataDomeHandler
+### DataDomeHandler - Solve DataDome Challenges
+
+Handles **slider captchas**, **interstitial pages**, and **device fingerprinting**:
+
 ```javascript
 const dataDomeHandler = new DataDomeHandler({
     session: session,
@@ -114,7 +143,10 @@ const dataDomeHandler = new DataDomeHandler({
 });
 ```
 
-### IncapsulaHandler
+### IncapsulaHandler - Bypass Incapsula Protection
+
+Manages **Reese84 sensors**, **UTMVC cookies**, and **dynamic script handling**:
+
 ```javascript
 const incapsulaHandler = new IncapsulaHandler({
     session: session,
@@ -126,7 +158,10 @@ const incapsulaHandler = new IncapsulaHandler({
 });
 ```
 
-### KasadaHandler
+### KasadaHandler - Defeat Kasada Bot Manager
+
+Automatically handles **IPS script processing**, **TL endpoint management**, and **POW generation**:
+
 ```javascript
 const kasadaHandler = new KasadaHandler({
     session: session,
@@ -135,17 +170,12 @@ const kasadaHandler = new KasadaHandler({
 });
 ```
 
-## Environment Setup
-
-Create a `.env` file:
-```
-API_KEY=your_hyper_sdk_api_key_here
-```
-
-## Best Practices
+## 🎯 Best Practices
 
 ### Proxy Configuration
-Always use a proxy to avoid IP-based detection:
+
+Always use a proxy to avoid IP-based detection and rate limiting:
+
 ```javascript
 const browser = await chromium.launch({
     proxy: {
@@ -156,8 +186,10 @@ const browser = await chromium.launch({
 });
 ```
 
-### User Agent
-Use realistic, up-to-date user agents:
+### User Agent Management
+
+Use realistic, up-to-date user agents that match your target audience:
+
 ```javascript
 const context = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
@@ -165,7 +197,9 @@ const context = await browser.newContext({
 ```
 
 ### Error Handling
-Always implement proper error handling:
+
+Always implement proper error handling for robust automation:
+
 ```javascript
 try {
     await handler.initialize(page, context);
@@ -176,29 +210,33 @@ try {
 }
 ```
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 ### Common Issues
 
-1. **Handler not initializing**: Ensure the Hyper SDK session is valid and has sufficient credits
-2. **Script path mapping**: For Incapsula, ensure script paths are correctly mapped to site keys. Contact support for site keys.
+**Handler not initializing**
+- Ensure the Hyper SDK session is valid and has sufficient credits
+- Verify your API key has the necessary permissions
+- Check network connectivity to Hyper SDK endpoints
 
-## API Reference
+**Script path mapping errors (Incapsula)**
+- Ensure script paths are correctly mapped to site keys
+- Contact support for accurate site key information
+- Monitor browser network requests for script path changes
 
-### Handler Methods
+**Browser compatibility issues**
+- Use Chrome/Chromium browsers for best compatibility
+- Ensure Playwright is updated to the latest version
+- Verify user agent matches your browser choice
 
-- `initialize(page, context)` - Initialize handler with Playwright page and context
+## 🆘 Support
 
-### Configuration Options
+### Contact Information
 
-All handlers support:
-- `session` - Hyper SDK session instance
-- `ipAddress` - Client IP address
-- `acceptLanguage` - Browser accept-language header
+For technical support or API questions:
+- Documentation: [https://docs.justhyped.dev](https://docs.justhyped.dev)
+- Discord: [https://discord.gg/akamai](https://discord.gg/akamai)
 
-Additional options per handler:
-- **IncapsulaHandler**: `scriptPathToSitekey` - Map of script paths to site keys
+---
 
-## Support
-
-For technical support and API documentation, visit the Hyper SDK documentation or contact support.
+**Keywords**: Playwright automation, bot protection bypass, web scraping, Akamai bypass, DataDome bypass, Incapsula bypass, Kasada bypass, anti-bot, captcha solver, browser automation, headless browser, web automation, bot detection, Playwright extension
