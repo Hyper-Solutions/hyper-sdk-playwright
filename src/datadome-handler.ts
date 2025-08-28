@@ -331,7 +331,7 @@ export class DataDomeHandler {
             this.captchaCapture.deviceCheckLink = sliderResult.payload;
 
             // Execute solution in the iframe
-            await this.executeSolutionInIframe(captchaFrame, sliderResult.payload);
+            await this.executeSolutionInIframe(page, sliderResult.payload);
             console.log('[DataDomeHandler] Captcha solution executed successfully');
 
             // Override extra headers
@@ -399,8 +399,17 @@ export class DataDomeHandler {
     /**
      * Execute the solution in the captcha iframe
      */
-    private async executeSolutionInIframe(captchaFrame: Frame, deviceCheckLink: string): Promise<void> {
+    private async executeSolutionInIframe(page: Page, deviceCheckLink: string): Promise<void> {
         try {
+            // Find the captcha iframe
+            const captchaFrame = page.frames().find(frame =>
+                frame.url().includes('captcha-delivery.com')
+            );
+
+            if (!captchaFrame) {
+                throw new Error('Could not find captcha iframe');
+            }
+
             // This is inspired from window.captchaCallback function that dd uses to communicate with the c.js script
             // which is responsible for redirecting back to the site after solving slider.
             await captchaFrame.evaluate((generatedDeviceCheckLink) => {
