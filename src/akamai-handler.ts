@@ -160,9 +160,9 @@ export class AkamaiHandler {
         });
 
         // Regex pattern for SBSD scripts like: https://www.example.com/path/script.js?v=12345678-1234-1234-1234-123456789012
-        const sbsdScriptRegex = /^https?:\/\/[^\/]+\/[a-zA-Z\d\/\-_\.]+\?v=[a-f\d\-]{36}/i;
-
-        await page.route(sbsdScriptRegex, async (route) => {
+        await page.route(url => {
+            return url.toString().startsWith(this.scriptCapture.sbsdScriptUrl);
+        }, async (route) => {
             const request = route.request();
             const requestUrl = request.url();
 
