@@ -11,6 +11,19 @@ A powerful **Playwright extension** that provides automated solving capabilities
 
 Perfect for **web scraping**, **automation testing**, **monitoring**, and **data collection** from protected websites.
 
+
+## 🔑 Getting API Access
+
+Before using this SDK, you'll need an API key from Hyper Solutions:
+
+1. **Visit [hypersolutions.co](https://hypersolutions.co?utm_source=github&utm_medium=sdk_readme&utm_campaign=playwirhgt_sdk_api_access)** to create your account
+2. **Choose your plan**:
+    - 💳 **Pay-as-you-go**: Perfect for testing and small-scale usage
+    - 📊 **Subscription plans**: Cost-effective for high-volume applications
+3. **Get your API key** from the dashboard
+4. **Start bypassing bot protection** with this SDK!
+
+
 ## ✨ Features
 
 - 🛡️ **Akamai Bot Manager** - Automated sensor data generation and challenge solving
