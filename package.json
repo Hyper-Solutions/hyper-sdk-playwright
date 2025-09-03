@@ -1,18 +1,20 @@
 {
   "name": "hyper-sdk-playwright",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.3",
   "description": "",
   "main": "index.js",
   "scripts": {
     "prepare": "node prepare.js",
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@playwright/test": "^1.54.1",
-    "hyper-sdk-js": "^2.2.2"
+    "hyper-sdk-js": "^2.5.0"
   }
 }

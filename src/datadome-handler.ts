@@ -465,6 +465,7 @@ export class DataDomeHandler {
                     } else {
                         setTimeout(function () {
                             // Reload compatible with IE 11
+                            // @ts-ignore
                             window.location = window.location;
                         }, 2000);
                     }

@@ -1,0 +1,12 @@
+# Test files
+**/*.test.ts
+.idea/*
+**/*.test.js
+**/test/
+**/tests/
+**/*-test.ts
+**/*-test.js
+videos/*
+jest.config.js
+jest.config.ts
+tsconfig.json
