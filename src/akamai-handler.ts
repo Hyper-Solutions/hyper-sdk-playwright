@@ -1,8 +1,7 @@
-import { Page, BrowserContext } from 'playwright';
-import { Session } from 'hyper-sdk-js';
-import { generateSensorData, SensorInput } from "hyper-sdk-js/akamai/sensor";
-import { generateSbsdPayload, SbsdInput } from "hyper-sdk-js/akamai/sbsd";
-import { parseV3DynamicValues, V3DynamicInput } from "hyper-sdk-js/akamai/dynamic";
+import {BrowserContext, Page} from 'playwright';
+import {Session} from 'hyper-sdk-js';
+import {generateSensorData, SensorInput} from "hyper-sdk-js/akamai/sensor";
+import {generateSbsdPayload, SbsdInput} from "hyper-sdk-js/akamai/sbsd";
 import {Route} from "@playwright/test";
 
 export interface AkamaiHandlerConfig {
@@ -14,7 +13,7 @@ export interface AkamaiHandlerConfig {
 
 export interface ScriptCapture {
     scriptUrl: string | null;
-    dynamicValues: string | null;
+    scriptSrc: string | null;
     sbsdScriptUrl: string | null;
     sbsdResponseText: string | null;
     sbsdUuid: string | null;
@@ -31,15 +30,15 @@ export class AkamaiHandler {
     // Captured data
     private scriptCapture: ScriptCapture = {
         scriptUrl: null,
-        dynamicValues: null,
+        scriptSrc: null,
         sbsdScriptUrl: null,
         sbsdResponseText: null,
         sbsdUuid: null
     };
 
-    // Promise management for dynamic values
-    private dynamicValuesPromise: Promise<void>;
-    private resolveDynamicValues: (() => void) | null = null;
+    // Promise management for script content
+    private scriptSrcPromise: Promise<void>;
+    private resolveScriptSrc: (() => void) | null = null;
 
     constructor(config: AkamaiHandlerConfig) {
         this.session = config.session;
@@ -47,8 +46,8 @@ export class AkamaiHandler {
         this.userAgent = config.userAgent || '';
         this.acceptLanguage = config.acceptLanguage || 'en-US,en;q=0.9';
 
-        this.dynamicValuesPromise = new Promise((resolve) => {
-            this.resolveDynamicValues = resolve;
+        this.scriptSrcPromise = new Promise((resolve) => {
+            this.resolveScriptSrc = resolve;
         });
     }
 
@@ -61,7 +60,7 @@ export class AkamaiHandler {
     }
 
     /**
-     * Set up response handler to capture script URLs and dynamic values
+     * Set up response handler to capture script URLs
      */
     private async setupResponseHandler(page: Page): Promise<void> {
         page.on('response', async (response) => {
@@ -70,7 +69,7 @@ export class AkamaiHandler {
             const requestUrl = request.url();
 
             try {
-                // Capture sensor script URL and dynamic values
+                // Capture sensor script URL
                 if (request.method() === 'GET' && 'time-to-live-seconds' in headers) {
                     await this.handleSensorScriptResponse(response, requestUrl);
                 }
@@ -96,16 +95,12 @@ export class AkamaiHandler {
         this.sessionContext = "";
 
         const buffer = await response.body();
-        const responseText = buffer.toString('utf-8');
-        this.scriptCapture.dynamicValues = await parseV3DynamicValues(
-            this.session,
-            new V3DynamicInput(responseText)
-        );
+        this.scriptCapture.scriptSrc = buffer.toString('utf-8');
 
-        if (this.resolveDynamicValues) {
-            this.resolveDynamicValues();
+        if (this.scriptSrcPromise) {
+            this.resolveScriptSrc();
         }
-        console.log('[AkamaiHandler] Dynamic values parsed and ready');
+        console.log('[AkamaiHandler] Sensor script content saved');
     }
 
     /**
@@ -233,14 +228,14 @@ export class AkamaiHandler {
     private async handleSensorRequest(route: Route, page: Page, context: BrowserContext): Promise<void> {
         console.log('[AkamaiHandler] Intercepting sensor POST request');
 
-        // Wait for dynamic values to be available
-        await this.dynamicValuesPromise;
+        // Wait for script src to be available
+        await this.scriptSrcPromise;
 
         const cookies = await context.cookies();
         const abck = cookies.find(c => c.name === '_abck')?.value;
         const bmsz = cookies.find(c => c.name === 'bm_sz')?.value;
 
-        if (!abck || !bmsz || !this.scriptCapture.dynamicValues) {
+        if (!abck || !bmsz || !this.scriptCapture.scriptSrc) {
             console.log('[AkamaiHandler] Missing required cookies or dynamic values, continuing with original request');
             return route.continue();
         }
@@ -262,8 +257,7 @@ export class AkamaiHandler {
             this.ipAddress,
             this.acceptLanguage,
             this.sessionContext,
-            undefined,
-            this.scriptCapture.dynamicValues
+            this.sessionContext == "" ? this.scriptCapture.scriptSrc : "", // mutually exclusive
         ));
 
         this.sessionContext = result.context;
@@ -351,7 +345,7 @@ export class AkamaiHandler {
     public reset(): void {
         this.scriptCapture = {
             scriptUrl: null,
-            dynamicValues: null,
+            scriptSrc: null,
             sbsdScriptUrl: null,
             sbsdResponseText: null,
             sbsdUuid: null
@@ -359,8 +353,8 @@ export class AkamaiHandler {
         this.sessionContext = "";
         this.sbsdIndex = 0;
 
-        this.dynamicValuesPromise = new Promise((resolve) => {
-            this.resolveDynamicValues = resolve;
+        this.scriptSrcPromise = new Promise((resolve) => {
+            this.resolveScriptSrc = resolve;
         });
     }
 }
