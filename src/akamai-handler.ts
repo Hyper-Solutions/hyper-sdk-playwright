@@ -258,6 +258,7 @@ export class AkamaiHandler {
             this.acceptLanguage,
             this.sessionContext,
             this.sessionContext == "" ? this.scriptCapture.scriptSrc : "", // mutually exclusive
+            this.scriptCapture.scriptUrl
         ));
 
         this.sessionContext = result.context;
