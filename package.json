@@ -15,6 +15,9 @@
   "type": "module",
   "dependencies": {
     "@playwright/test": "^1.54.1",
-    "hyper-sdk-js": "^2.8.1"
+    "hyper-sdk-js": "^2.9.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2"
   }
 }

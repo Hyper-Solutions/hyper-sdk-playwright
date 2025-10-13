@@ -90,10 +90,6 @@ async function main() {
         session,
         ipAddress: '203.0.113.1',
         acceptLanguage: 'en-US,en;q=0.9',
-        scriptPathToSitekey: new Map([
-            ['/script-path-1', 'site-key-1'],
-            ['/script-path-2', 'site-key-2']
-        ])
     });
 
     const kasadaHandler = new KasadaHandler({

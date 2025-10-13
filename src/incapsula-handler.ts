@@ -9,12 +9,11 @@ export interface IncapsulaHandlerConfig {
     ipAddress: string;
     userAgent?: string;
     acceptLanguage?: string;
-    scriptPathToSitekey: Map<string, string>;
 }
 
 export interface IncapsulaScriptCapture {
     interceptedPaths: string[];
-    activeSitekeys: Map<string, string>;
+    detectedScripts: Map<string, string>; // path -> script URL
 }
 
 export class IncapsulaHandler {
@@ -22,32 +21,78 @@ export class IncapsulaHandler {
     private userAgent: string;
     private ipAddress: string;
     private acceptLanguage: string;
-    private scriptPathToSitekey: Map<string, string>;
     private utmvc: string;
 
     // Captured data
     private scriptCapture: IncapsulaScriptCapture = {
         interceptedPaths: [],
-        activeSitekeys: new Map()
+        detectedScripts: new Map()
     };
 
-    // Map to store script URLs for each path
+    // Map to store script URLs and their paths
     private scriptPathToScriptUrl: Map<string, string> = new Map();
+    private scriptPathToScriptContent: Map<string, string> = new Map();
+    private detectedReese84Paths: Set<string> = new Set();
 
     constructor(config: IncapsulaHandlerConfig) {
         this.session = config.session;
         this.ipAddress = config.ipAddress;
         this.userAgent = config.userAgent || '';
         this.acceptLanguage = config.acceptLanguage || 'en-US,en;q=0.9';
-        this.scriptPathToSitekey = config.scriptPathToSitekey;
     }
 
     /**
      * Initialize the handler on a Playwright page
      */
     public async initialize(page: Page, context: BrowserContext): Promise<void> {
+        await this.setupScriptDetector(page, context);
         await this.setupRequestInterceptor(page, context);
-        await this.setupResponseInterceptor(page, context);
+    }
+
+    /**
+     * Set up script detector to identify Reese84 scripts
+     */
+    private async setupScriptDetector(page: Page, context: BrowserContext): Promise<void> {
+        page.on('response', async (response) => {
+            try {
+                const url = response.url();
+                const method = response.request().method();
+
+                // Only interested in GET requests
+                if (method !== 'GET') return;
+
+                // Check headers
+                const headers = response.headers();
+                const xCdn = headers['x-cdn'];
+                const contentType = headers['content-type'];
+
+                if (!xCdn || xCdn.toLowerCase() !== 'imperva') return;
+
+                if (!contentType || !contentType.toLowerCase().includes('javascript')) return;
+
+                // Get response body
+                const body = await response.text();
+
+                // Check if response contains 'var reese84'
+                if (!body.includes('var reese84')) return;
+
+                // Extract path from URL
+                const urlObj = new URL(url);
+                const scriptPath = urlObj.pathname;
+
+                console.log(`[IncapsulaHandler] Detected Reese84 script at path: ${scriptPath}`);
+                console.log(`[IncapsulaHandler] Script URL: ${url}`);
+
+                // Store the detected script
+                this.detectedReese84Paths.add(scriptPath);
+                this.scriptPathToScriptUrl.set(scriptPath, url);
+                this.scriptPathToScriptContent.set(scriptPath, body);
+                this.scriptCapture.detectedScripts.set(scriptPath, url);
+
+            } catch (error) {
+                console.error('Error in script detector:', error);
+            }
+        });
     }
 
     /**
@@ -123,13 +168,12 @@ export class IncapsulaHandler {
         });
 
         // Use a single broad pattern to catch all potential Incapsula requests
-        // Then do specific path matching inside the handler
         await page.route(/.*\?.*d=.*/, async (route) => {
             const request = route.request();
             const requestUrl = request.url();
 
             try {
-                // Check if this request matches any of our configured script paths
+                // Check if this request matches any of our detected Reese84 script paths
                 const matchingScriptPath = this.findMatchingScriptPath(requestUrl);
 
                 if (matchingScriptPath && this.shouldInterceptIncapsulaRequest(requestUrl, request.method(), matchingScriptPath)) {
@@ -148,32 +192,6 @@ export class IncapsulaHandler {
     }
 
     /**
-     * Set up response interceptor to capture script URLs
-     */
-    private async setupResponseInterceptor(page: Page, context: BrowserContext): Promise<void> {
-        // Listen for responses to capture script URLs
-        page.on('response', async (response) => {
-            try {
-                const url = response.url();
-                const method = response.request().method();
-
-                // Only interested in GET requests
-                if (method !== 'GET') return;
-
-                // Check if this response matches any of our script paths
-                const matchingScriptPath = this.findMatchingScriptPath(url);
-
-                if (matchingScriptPath) {
-                    console.log(`[IncapsulaHandler] Captured script URL for path ${matchingScriptPath}: ${url}`);
-                    this.scriptPathToScriptUrl.set(matchingScriptPath, url);
-                }
-            } catch (error) {
-                console.error('Error in response interceptor:', error);
-            }
-        });
-    }
-
-    /**
      * Find which script path (if any) matches the given URL
      */
     private findMatchingScriptPath(requestUrl: string): string | null {
@@ -181,8 +199,8 @@ export class IncapsulaHandler {
             const url = new URL(requestUrl);
             const pathname = url.pathname;
 
-            // Check if any of our configured script paths match this URL
-            for (const scriptPath of this.scriptPathToSitekey.keys()) {
+            // Check if any of our detected script paths match this URL
+            for (const scriptPath of this.detectedReese84Paths) {
                 if (pathname.startsWith(scriptPath)) {
                     console.log(`[IncapsulaHandler] Path match found: ${scriptPath} matches ${pathname}`);
                     return scriptPath;
@@ -204,53 +222,23 @@ export class IncapsulaHandler {
     }
 
     /**
-     * Extract domain from request URL and get corresponding sitekey
-     */
-    private getSitekeyForRequest(requestUrl: string, scriptPath: string): string | null {
-        try {
-            const url = new URL(requestUrl);
-            const domainParam = url.searchParams.get('d');
-
-            if (domainParam && this.scriptPathToSitekey.has(scriptPath)) {
-                const baseSitekey = this.scriptPathToSitekey.get(scriptPath);
-                return baseSitekey || null;
-            }
-
-            return null;
-        } catch (error) {
-            console.error('Error extracting domain from URL:', error);
-            return null;
-        }
-    }
-
-    /**
      * Handle Incapsula request interception
      */
     private async handleIncapsulaRequest(route: Route, page: Page, context: BrowserContext, scriptPath: string, requestUrl: string): Promise<void> {
-        let contentType = await route.request().headerValue("content-type");
-        if (!contentType.includes("application/json")) {
-            // Request is done to get the expiration of the reese84 cookie, let it through.
+        const postData = route.request().postData();
+
+        // If request body starts with a quote, let it through (likely a refresh request)
+        if (postData && postData.startsWith('"')) {
             console.log(`[IncapsulaHandler] Letting through Reese84 refresh POST request for path: ${scriptPath}`);
             return route.continue();
         }
 
         console.log(`[IncapsulaHandler] Intercepting Incapsula POST request for path: ${scriptPath}`);
 
-        // Get the sitekey for this request
-        const sitekey = this.getSitekeyForRequest(requestUrl, scriptPath);
-
-        if (!sitekey) {
-            console.log('[IncapsulaHandler] Could not determine sitekey, continuing with original request');
-            return route.continue();
-        }
-
-        console.log(`[IncapsulaHandler] Using sitekey: ${sitekey} for request`);
-
         // Track this interception
         if (!this.scriptCapture.interceptedPaths.includes(scriptPath)) {
             this.scriptCapture.interceptedPaths.push(scriptPath);
         }
-        this.scriptCapture.activeSitekeys.set(scriptPath, sitekey);
 
         // Get current user agent if not set
         if (!this.userAgent) {
@@ -259,16 +247,15 @@ export class IncapsulaHandler {
 
         const result = await generateReese84Sensor(this.session, new Reese84Input(
             this.userAgent,
-            sitekey,
             this.ipAddress,
             this.acceptLanguage,
             page.url(),
             "", // TODO: handle POW
-            "",
+            this.scriptPathToScriptContent.get(scriptPath) || "",
             this.scriptPathToScriptUrl.get(scriptPath) || "", // Use captured script URL
         ));
 
-        console.log(`[IncapsulaHandler] Request details - Sitekey: ${sitekey}, UserAgent: ${this.userAgent}, IP: ${this.ipAddress}`);
+        console.log(`[IncapsulaHandler] Request details - UserAgent: ${this.userAgent}, IP: ${this.ipAddress}, ScriptPath: ${scriptPath}`);
 
         await route.continue({
             postData: result
@@ -276,28 +263,11 @@ export class IncapsulaHandler {
     }
 
     /**
-     * Add or update script path to sitekey mapping
-     */
-    public addScriptPathMapping(scriptPath: string, sitekey: string): void {
-        this.scriptPathToSitekey.set(scriptPath, sitekey);
-        console.log(`[IncapsulaHandler] Added mapping: ${scriptPath} -> ${sitekey}`);
-    }
-
-    /**
-     * Remove script path mapping
-     */
-    public removeScriptPathMapping(scriptPath: string): void {
-        this.scriptPathToSitekey.delete(scriptPath);
-        console.log(`[IncapsulaHandler] Removed mapping for: ${scriptPath}`);
-    }
-
-    /**
      * Get current capture status
      */
-    public getStatus(): IncapsulaScriptCapture & { scriptPathMappings: Map<string, string>; scriptUrls: Map<string, string> } {
+    public getStatus(): IncapsulaScriptCapture & { scriptUrls: Map<string, string> } {
         return {
             ...this.scriptCapture,
-            scriptPathMappings: new Map(this.scriptPathToSitekey),
             scriptUrls: new Map(this.scriptPathToScriptUrl)
         };
     }
@@ -308,8 +278,10 @@ export class IncapsulaHandler {
     public reset(): void {
         this.scriptCapture = {
             interceptedPaths: [],
-            activeSitekeys: new Map()
+            detectedScripts: new Map()
         };
         this.scriptPathToScriptUrl.clear();
+        this.scriptPathToScriptContent.clear();
+        this.detectedReese84Paths.clear();
     }
 }
