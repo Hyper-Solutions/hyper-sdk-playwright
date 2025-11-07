@@ -101,14 +101,14 @@ export class DataDomeHandler {
                 });
 
                 // Override extra headers
-                await page.setExtraHTTPHeaders(interstitialResult.headers);
+                //await page.setExtraHTTPHeaders(interstitialResult.headers);
             } else {
                 await route.continue();
             }
         });
 
         // Intercept /js endpoint for tags requests
-        await page.route('**/js', async (route) => {
+        await page.route(/.*\/js\/?$/, async (route) => {
             const request = route.request();
 
             if (request.method() === 'POST') {
@@ -335,7 +335,7 @@ export class DataDomeHandler {
             console.log('[DataDomeHandler] Captcha solution executed successfully');
 
             // Override extra headers
-            await page.setExtraHTTPHeaders(sliderResult.headers);
+            //await page.setExtraHTTPHeaders(sliderResult.headers);
         } catch (error) {
             console.error('[DataDomeHandler] Error handling captcha page response:', error);
         } finally {

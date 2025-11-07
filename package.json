@@ -1,8 +1,26 @@
 {
   "name": "hyper-sdk-playwright",
-  "version": "1.0.0-beta.5",
+  "version": "1.0.0-beta.7",
   "description": "",
   "main": "index.js",
+  "types": "index.d.ts",
+  "type": "module",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "src/**/*.js",
+    "src/**/*.d.ts",
+    "!src/**/*-test.*",
+    "README.md",
+    "LICENSE",
+    "prepare.js"
+  ],
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
   "scripts": {
     "prepare": "node prepare.js",
     "build": "tsc",
@@ -12,7 +30,6 @@
   "keywords": [],
   "author": "",
   "license": "MIT",
-  "type": "module",
   "dependencies": {
     "@playwright/test": "^1.54.1",
     "hyper-sdk-js": "^2.9.0"
