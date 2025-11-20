@@ -131,13 +131,13 @@ export class DataDomeHandler {
 
                     const tagsResult = await generateTagsPayload(this.session, new TagsInput(
                         this.userAgent,
-                        keyValues["cid"],
                         keyValues["ddk"],
                         keyValues["Referer"],
                         keyValues["jsType"],
                         this.ipAddress,
                         this.acceptLanguage,
                         keyValues["ddv"],
+                        keyValues["cid"],
                     ));
 
                     if (!tagsResult) {
