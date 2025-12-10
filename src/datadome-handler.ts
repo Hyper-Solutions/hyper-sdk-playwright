@@ -132,7 +132,7 @@ export class DataDomeHandler {
                     const tagsResult = await generateTagsPayload(this.session, new TagsInput(
                         this.userAgent,
                         keyValues["ddk"],
-                        keyValues["Referer"],
+                        decodeURIComponent(keyValues["Referer"]),
                         keyValues["jsType"],
                         this.ipAddress,
                         this.acceptLanguage,
