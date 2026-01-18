@@ -1,7 +1,5 @@
-import {BrowserContext, Page} from 'playwright';
-import {Session} from 'hyper-sdk-js';
-import {generateSensorData, SensorInput} from "hyper-sdk-js/akamai/sensor";
-import {generateSbsdPayload, SbsdInput} from "hyper-sdk-js/akamai/sbsd";
+import {BrowserContext, Page} from "playwright";
+import {Session, generateSensorData, SensorInput, generateSbsdPayload, SbsdInput} from "hyper-sdk-js";
 import {Route} from "@playwright/test";
 
 export interface AkamaiHandlerConfig {

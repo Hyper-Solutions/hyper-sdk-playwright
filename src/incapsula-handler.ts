@@ -1,8 +1,6 @@
 import { Page, BrowserContext } from 'playwright';
-import { Session } from 'hyper-sdk-js';
+import { Session, generateReese84Sensor, Reese84Input, generateUtmvcCookie, UtmvcInput } from 'hyper-sdk-js';
 import { Route } from "@playwright/test";
-import { generateReese84Sensor, Reese84Input } from "hyper-sdk-js/incapsula/reese";
-import { generateUtmvcCookie, UtmvcInput } from "hyper-sdk-js/incapsula/utmvc";
 
 export interface IncapsulaHandlerConfig {
     session: Session;

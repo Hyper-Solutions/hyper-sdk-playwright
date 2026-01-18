@@ -1,7 +1,6 @@
-import { Page, BrowserContext } from 'playwright';
-import { Session } from 'hyper-sdk-js';
+import { Page, BrowserContext } from "playwright";
+import { Session, generateKasadaPayload, KasadaPayloadInput } from "hyper-sdk-js";
 import { Route } from "@playwright/test";
-import {generateKasadaPayload, KasadaPayloadInput} from "hyper-sdk-js/kasada/payload";
 
 export interface KasadaHandlerConfig {
     session: Session;

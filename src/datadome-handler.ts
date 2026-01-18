@@ -1,9 +1,5 @@
 import { Page, BrowserContext } from 'playwright';
-import { Session } from 'hyper-sdk-js';
-import { generateSliderPayload, SliderInput } from "hyper-sdk-js/datadome/slider";
-import { generateInterstitialPayload, InterstitialInput } from "hyper-sdk-js/datadome/interstitial";
-import { generateTagsPayload, TagsInput } from "hyper-sdk-js/datadome/tags";
-import {Frame} from "@playwright/test";
+import { Session, generateSliderPayload, SliderInput, generateInterstitialPayload, InterstitialInput, generateTagsPayload, TagsInput } from 'hyper-sdk-js';
 
 export interface DataDomeHandlerConfig {
     session: Session;
@@ -275,10 +271,18 @@ export class DataDomeHandler {
     private async handleCaptchaPageResponse(response: any, page: Page): Promise<void> {
         if (this.isProcessing) return;
 
+        const responseUrl = response.url();
+
+        // Check for hardblock (t=bv parameter)
+        if (responseUrl.includes('t=bv')) {
+            console.log('[DataDomeHandler] Hardblock detected (t=bv) - cannot solve this captcha');
+            return;
+        }
+
         try {
             this.isProcessing = true;
-            this.captchaCapture.captchaPageUrl = response.url();
-            console.log(`[DataDomeHandler] Captcha page detected: ${response.url()}`);
+            this.captchaCapture.captchaPageUrl = responseUrl;
+            console.log(`[DataDomeHandler] Captcha page detected: ${responseUrl}`);
 
             // Wait for both images to be available
             console.log('[DataDomeHandler] Waiting for images to be captured...');
@@ -310,10 +314,12 @@ export class DataDomeHandler {
             // Generate device check link
             console.log('[DataDomeHandler] Generating device check link...');
 
+            let text = await response.text();
+
             const sliderResult = await generateSliderPayload(this.session, new SliderInput(
                 this.userAgent,
                 this.captchaCapture.captchaPageUrl,
-                await response.text(),
+                text,
                 this.captchaCapture.puzzleImageBase64,
                 this.captchaCapture.pieceImageBase64,
                 parentUrl,
@@ -349,14 +355,22 @@ export class DataDomeHandler {
     private async handleInterstitialPageResponse(response: any, page: Page): Promise<void> {
         if (this.isProcessing) return;
 
+        const responseUrl = response.url();
+
+        // Check for hardblock (t=bv parameter)
+        if (responseUrl.includes('t=bv')) {
+            console.log('[DataDomeHandler] Hardblock detected (t=bv) - cannot solve this interstitial');
+            return;
+        }
+
         try {
             this.isProcessing = true;
 
             // Save the interstitial page URL and response text
-            this.captchaCapture.interstitialPageUrl = response.url();
+            this.captchaCapture.interstitialPageUrl = responseUrl;
             this.captchaCapture.interstitialPageText = await response.text();
 
-            console.log(`[DataDomeHandler] Interstitial page detected: ${response.url()}`);
+            console.log(`[DataDomeHandler] Interstitial page detected: ${responseUrl}`);
             console.log(`[DataDomeHandler] Saved interstitial page text (${this.captchaCapture.interstitialPageText.length} characters)`);
             console.log('[DataDomeHandler] Interstitial data saved - waiting for POST request interception');
 
