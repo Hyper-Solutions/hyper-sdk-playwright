@@ -284,6 +284,77 @@ export class DataDomeHandler {
             this.captchaCapture.captchaPageUrl = responseUrl;
             console.log(`[DataDomeHandler] Captcha page detected: ${responseUrl}`);
 
+            // Get the response text early - we'll need it for both noPuzzle check and slider payload
+            const responseText = await response.text();
+
+            // Find the captcha iframe
+            const captchaFrame = page.frames().find(frame =>
+                frame.url().includes('captcha-delivery.com')
+            );
+
+            if (!captchaFrame) {
+                console.error('[DataDomeHandler] Could not find captcha iframe');
+                return;
+            }
+
+            // Wait a moment for the iframe to initialize ddm object
+            await page.waitForTimeout(500);
+
+            // Check if noPuzzle mode is enabled (images won't load automatically)
+            const noPuzzleMode = await captchaFrame.evaluate(() => {
+                const ddm = (window as any).ddm;
+                console.log('[DataDomeHandler] ddm object:', ddm);
+                console.log('[DataDomeHandler] ddm.noPuzzle:', ddm?.noPuzzle);
+                return ddm?.noPuzzle === true;
+            });
+
+            console.log(`[DataDomeHandler] noPuzzle mode detected: ${noPuzzleMode}`);
+
+            if (noPuzzleMode) {
+                // Parse captchaChallengePath from the response HTML
+                const captchaPathMatch = responseText.match(/captchaChallengePath:\s*['"]([^'"]+)['"]/);
+
+                if (captchaPathMatch && captchaPathMatch[1]) {
+                    const captchaChallengePath = captchaPathMatch[1];
+                    console.log(`[DataDomeHandler] Found captchaChallengePath: ${captchaChallengePath}`);
+
+                    // Derive the fragment image path
+                    const lastDotIndex = captchaChallengePath.lastIndexOf('.');
+                    const extension = lastDotIndex > -1 ? captchaChallengePath.slice(lastDotIndex) : '';
+                    const fragImagePath = captchaChallengePath.replace(extension, '.frag.png');
+                    console.log(`[DataDomeHandler] Derived fragment image path: ${fragImagePath}`);
+
+                    // Trigger image loading in the iframe to fire the network requests
+                    console.log('[DataDomeHandler] Triggering manual image loading for noPuzzle mode...');
+                    await captchaFrame.evaluate(({ puzzlePath, fragPath }) => {
+                        console.log('[DataDomeHandler-iframe] Loading puzzle image:', puzzlePath);
+                        console.log('[DataDomeHandler-iframe] Loading fragment image:', fragPath);
+
+                        // Load the puzzle image (main background)
+                        const puzzleImg = new Image();
+                        puzzleImg.crossOrigin = 'Anonymous';
+                        puzzleImg.onload = () => console.log('[DataDomeHandler-iframe] Puzzle image loaded successfully');
+                        puzzleImg.onerror = (e) => console.error('[DataDomeHandler-iframe] Puzzle image failed to load:', e);
+                        puzzleImg.src = puzzlePath;
+
+                        // Load the fragment image (the sliding piece)
+                        const fragImg = new Image();
+                        fragImg.crossOrigin = 'Anonymous';
+                        fragImg.onload = () => console.log('[DataDomeHandler-iframe] Fragment image loaded successfully');
+                        fragImg.onerror = (e) => console.error('[DataDomeHandler-iframe] Fragment image failed to load:', e);
+                        fragImg.src = fragPath;
+                    }, { puzzlePath: captchaChallengePath, fragPath: fragImagePath });
+
+                    console.log('[DataDomeHandler] Manual image loading triggered, waiting for network responses...');
+                } else {
+                    console.error('[DataDomeHandler] noPuzzle mode detected but could not parse captchaChallengePath from response');
+                    console.log('[DataDomeHandler] Response text snippet:', responseText.substring(0, 2000));
+                    return;
+                }
+            } else {
+                console.log('[DataDomeHandler] Normal puzzle mode - images should load automatically');
+            }
+
             // Wait for both images to be available
             console.log('[DataDomeHandler] Waiting for images to be captured...');
             await this.imagesPromise;
@@ -300,26 +371,15 @@ export class DataDomeHandler {
                 this.userAgent = await page.evaluate(() => navigator.userAgent);
             }
 
-            // Find the captcha iframe
-            const captchaFrame = page.frames().find(frame =>
-                frame.url().includes('captcha-delivery.com')
-            );
-
-            if (!captchaFrame) {
-                throw new Error('Could not find captcha iframe');
-            }
-
             let parentUrl = await captchaFrame.evaluate(() =>  (window.location != window.parent.location) ? document.referrer : document.location.href);
 
             // Generate device check link
             console.log('[DataDomeHandler] Generating device check link...');
 
-            let text = await response.text();
-
             const sliderResult = await generateSliderPayload(this.session, new SliderInput(
                 this.userAgent,
                 this.captchaCapture.captchaPageUrl,
-                text,
+                responseText,
                 this.captchaCapture.puzzleImageBase64,
                 this.captchaCapture.pieceImageBase64,
                 parentUrl,
