@@ -1,6 +1,6 @@
 {
   "name": "hyper-sdk-playwright",
-  "version": "1.0.0-beta.11",
+  "version": "1.0.0-beta.12",
   "description": "",
   "main": "index.js",
   "types": "index.d.ts",

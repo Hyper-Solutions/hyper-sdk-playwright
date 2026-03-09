@@ -17,6 +17,25 @@ export interface ScriptCapture {
     sbsdUuid: string | null;
 }
 
+/**
+ * Simple async mutex to serialize critical sections.
+ * Ensures that concurrent callers execute one at a time in FIFO order.
+ */
+class AsyncMutex {
+    private queue: Promise<void> = Promise.resolve();
+
+    async acquire(): Promise<() => void> {
+        let release: () => void;
+        const next = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        const prev = this.queue;
+        this.queue = next;
+        await prev;
+        return release!;
+    }
+}
+
 export class AkamaiHandler {
     private session: Session;
     private userAgent: string;
@@ -37,6 +56,10 @@ export class AkamaiHandler {
     // Promise management for script content
     private scriptSrcPromise: Promise<void>;
     private resolveScriptSrc: (() => void) | null = null;
+
+    // Locks to prevent concurrent sensor/SBSD generation with the same cookies
+    private sensorMutex = new AsyncMutex();
+    private sbsdMutex = new AsyncMutex();
 
     constructor(config: AkamaiHandlerConfig) {
         this.session = config.session;
@@ -83,21 +106,26 @@ export class AkamaiHandler {
     }
 
     /**
-     * Handle sensor script response
+     * Handle sensor script response, clears context and resets the script
+     * source promise so any in-flight POSTs wait for the fresh script.
      */
     private async handleSensorScriptResponse(response: any, requestUrl: string): Promise<void> {
         this.scriptCapture.scriptUrl = requestUrl;
         console.log(`[AkamaiHandler] Captured sensor script URL: ${requestUrl}`);
 
-        // Reset context because we're working with a newly loaded script
+        // New script means previous context is stale — clear it immediately
+        // and create a fresh promise so any concurrent/queued POST requests
+        // will block until the new script content is ready.
         this.sessionContext = "";
+        this.scriptSrcPromise = new Promise((resolve) => {
+            this.resolveScriptSrc = resolve;
+        });
 
         const buffer = await response.body();
         this.scriptCapture.scriptSrc = buffer.toString('utf-8');
 
-        if (this.scriptSrcPromise) {
-            this.resolveScriptSrc();
-        }
+        // Resolve the promise now that the new script content is available
+        this.resolveScriptSrc!();
         console.log('[AkamaiHandler] Sensor script content saved');
     }
 
@@ -221,110 +249,122 @@ export class AkamaiHandler {
     }
 
     /**
-     * Handle sensor request interception
+     * Handle sensor request interception, serialized via mutex so concurrent
+     * POSTs don't generate sensor data with the same (stale) cookie values.
      */
     private async handleSensorRequest(route: Route, page: Page, context: BrowserContext): Promise<void> {
-        console.log('[AkamaiHandler] Intercepting sensor POST request');
+        const release = await this.sensorMutex.acquire();
+        try {
+            console.log('[AkamaiHandler] Intercepting sensor POST request');
 
-        // Wait for script src to be available
-        await this.scriptSrcPromise;
+            // Wait for script src to be available
+            await this.scriptSrcPromise;
 
-        const cookies = await context.cookies();
-        const abck = cookies.find(c => c.name === '_abck')?.value;
-        const bmsz = cookies.find(c => c.name === 'bm_sz')?.value;
+            const cookies = await context.cookies();
+            const abck = cookies.find(c => c.name === '_abck')?.value;
+            const bmsz = cookies.find(c => c.name === 'bm_sz')?.value;
 
-        if (!abck || !bmsz || !this.scriptCapture.scriptSrc) {
-            console.log('[AkamaiHandler] Missing required cookies or dynamic values, continuing with original request');
-            return route.continue();
+            if (!abck || !bmsz || !this.scriptCapture.scriptSrc) {
+                console.log('[AkamaiHandler] Missing required cookies or dynamic values, continuing with original request');
+                return route.continue();
+            }
+
+            console.log('[AkamaiHandler] Generating fresh sensor data');
+
+            // Get current user agent if not set
+            if (!this.userAgent) {
+                this.userAgent = await page.evaluate(() => navigator.userAgent);
+            }
+
+            // Generate fresh sensor data using SDK
+            const result = await generateSensorData(this.session, new SensorInput(
+                abck,
+                bmsz,
+                "3",
+                page.url(),
+                this.userAgent,
+                this.ipAddress,
+                this.acceptLanguage,
+                this.sessionContext,
+                this.sessionContext == "" ? this.scriptCapture.scriptSrc : "", // mutually exclusive
+                this.scriptCapture.scriptUrl
+            ));
+
+            this.sessionContext = result.context;
+
+            const modifiedData = JSON.stringify({
+                sensor_data: result.payload
+            });
+
+            console.log('[AkamaiHandler] Continuing request with SDK-generated sensor data');
+
+            await route.continue({
+                postData: modifiedData
+            });
+        } finally {
+            release();
         }
-
-        console.log('[AkamaiHandler] Generating fresh sensor data');
-
-        // Get current user agent if not set
-        if (!this.userAgent) {
-            this.userAgent = await page.evaluate(() => navigator.userAgent);
-        }
-
-        // Generate fresh sensor data using SDK
-        const result = await generateSensorData(this.session, new SensorInput(
-            abck,
-            bmsz,
-            "3",
-            page.url(),
-            this.userAgent,
-            this.ipAddress,
-            this.acceptLanguage,
-            this.sessionContext,
-            this.sessionContext == "" ? this.scriptCapture.scriptSrc : "", // mutually exclusive
-            this.scriptCapture.scriptUrl
-        ));
-
-        this.sessionContext = result.context;
-
-        const modifiedData = JSON.stringify({
-            sensor_data: result.payload
-        });
-
-        console.log('[AkamaiHandler] Continuing request with SDK-generated sensor data');
-
-        await route.continue({
-            postData: modifiedData
-        });
     }
 
     /**
-     * Handle SBSD request interception
+     * Handle SBSD request interception, serialized via mutex so concurrent
+     * POSTs don't generate payloads with the same (stale) cookie/index values.
      */
     private async handleSbsdRequest(route: any, page: Page, context: BrowserContext): Promise<void> {
-        console.log('[AkamaiHandler] Intercepting SBSD POST request');
+        const release = await this.sbsdMutex.acquire();
+        try {
+            console.log('[AkamaiHandler] Intercepting SBSD POST request');
 
-        const cookies = await context.cookies();
-        const bmso = cookies.find(c => c.name === "sbsd_o" || c.name === 'bm_so')?.value;
+            const cookies = await context.cookies();
+            const bmso = cookies.find(c => c.name === "sbsd_o" || c.name === 'bm_so')?.value;
 
-        if (!bmso || !this.scriptCapture.sbsdResponseText || !this.scriptCapture.sbsdUuid) {
-            console.log('[AkamaiHandler] Missing required cookie or SBSD data, continuing with original request');
-            return route.continue();
+            if (!bmso || !this.scriptCapture.sbsdResponseText || !this.scriptCapture.sbsdUuid) {
+                console.log('[AkamaiHandler] Missing required cookie or SBSD data, continuing with original request');
+                return route.continue();
+            }
+
+            console.log('[AkamaiHandler] Generating SBSD payload');
+
+            // Get current user agent if not set
+            if (!this.userAgent) {
+                this.userAgent = await page.evaluate(() => navigator.userAgent);
+            }
+
+            // Check if the request URL has a 't' parameter
+            const requestUrl = new URL(route.request().url());
+            const hasTimeParameter = requestUrl.searchParams.has('t');
+
+            // Use sbsdIndex 0 if 't' parameter exists, otherwise use current sbsdIndex
+            const indexToUse = hasTimeParameter ? 0 : this.sbsdIndex;
+
+            console.log(`[AkamaiHandler] Using SBSD index: ${indexToUse} (t parameter: ${hasTimeParameter})`);
+
+            // Generate SBSD payload using SDK
+            const result = await generateSbsdPayload(this.session, new SbsdInput(
+                indexToUse,
+                this.scriptCapture.sbsdUuid,
+                bmso,
+                page.url(),
+                this.userAgent,
+                this.scriptCapture.sbsdResponseText,
+                this.ipAddress,
+                this.acceptLanguage
+            ));
+
+            this.sbsdIndex++;
+
+            const modifiedData = JSON.stringify({
+                body: result
+            });
+
+            console.log('[AkamaiHandler] Continuing SBSD request with SDK-generated data');
+
+            await route.continue({
+                postData: modifiedData
+            });
+        } finally {
+            release();
         }
-
-        console.log('[AkamaiHandler] Generating SBSD payload');
-
-        // Get current user agent if not set
-        if (!this.userAgent) {
-            this.userAgent = await page.evaluate(() => navigator.userAgent);
-        }
-
-        // Check if the request URL has a 't' parameter
-        const requestUrl = new URL(route.request().url());
-        const hasTimeParameter = requestUrl.searchParams.has('t');
-
-        // Use sbsdIndex 0 if 't' parameter exists, otherwise use current sbsdIndex
-        const indexToUse = hasTimeParameter ? 0 : this.sbsdIndex;
-
-        console.log(`[AkamaiHandler] Using SBSD index: ${indexToUse} (t parameter: ${hasTimeParameter})`);
-
-        // Generate SBSD payload using SDK
-        const result = await generateSbsdPayload(this.session, new SbsdInput(
-            indexToUse,
-            this.scriptCapture.sbsdUuid,
-            bmso,
-            page.url(),
-            this.userAgent,
-            this.scriptCapture.sbsdResponseText,
-            this.ipAddress,
-            this.acceptLanguage
-        ));
-
-        this.sbsdIndex++;
-
-        const modifiedData = JSON.stringify({
-            body: result
-        });
-
-        console.log('[AkamaiHandler] Continuing SBSD request with SDK-generated data');
-
-        await route.continue({
-            postData: modifiedData
-        });
     }
 
     /**
