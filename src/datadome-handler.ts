@@ -125,11 +125,13 @@ export class DataDomeHandler {
                         keyValues[key] = value;
                     }
 
+                    const jsType = (keyValues["jsType"] === "ch" || keyValues["jsType"] === "le") ? keyValues["jsType"] : "ch";
+
                     const tagsResult = await generateTagsPayload(this.session, new TagsInput(
                         this.userAgent,
                         keyValues["ddk"],
                         decodeURIComponent(keyValues["Referer"]),
-                        keyValues["jsType"],
+                        jsType,
                         this.ipAddress,
                         this.acceptLanguage,
                         keyValues["ddv"],
