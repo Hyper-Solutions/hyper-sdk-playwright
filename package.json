@@ -32,7 +32,7 @@
   "license": "MIT",
   "dependencies": {
     "@playwright/test": "^1.54.1",
-    "hyper-sdk-js": "^2.12.0",
+    "hyper-sdk-js": "^3.1.0",
     "tsx": "^4.21.0"
   },
   "devDependencies": {
