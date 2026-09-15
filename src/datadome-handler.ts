@@ -1,5 +1,5 @@
 import { Page, BrowserContext } from 'playwright';
-import { Session, generateSliderPayload, SliderInput, generateInterstitialPayload, InterstitialInput, generateTagsPayload, TagsInput } from 'hyper-sdk-js';
+import { Session, generateSliderPayload, SliderInput, generateInterstitialPayload, InterstitialInput, generateTagsPayload, TagsInput, parseChallengeScriptUrl } from 'hyper-sdk-js';
 
 export interface DataDomeHandlerConfig {
     session: Session;
@@ -17,6 +17,8 @@ export interface CaptchaCapture {
     deviceCheckLink: string | null;
     interstitialPageUrl: string | null;
     interstitialPageText: string | null;
+    challengeScriptUrl: string | null;
+    challengeScript: string | null;
 }
 
 export class DataDomeHandler {
@@ -34,7 +36,9 @@ export class DataDomeHandler {
         captchaPageUrl: null,
         deviceCheckLink: null,
         interstitialPageUrl: null,
-        interstitialPageText: null
+        interstitialPageText: null,
+        challengeScriptUrl: null,
+        challengeScript: null
     };
 
     // Processing state
@@ -44,6 +48,11 @@ export class DataDomeHandler {
     private imagesPromise: Promise<void>;
     private resolveImages: (() => void) | null = null;
 
+    // Promise management for the challenge script, which DataDome sometimes
+    // serves from its own file instead of inlining it in the challenge page
+    private challengeScriptPromise: Promise<void>;
+    private resolveChallengeScript: (() => void) | null = null;
+
     constructor(config: DataDomeHandlerConfig) {
         this.session = config.session;
         this.ipAddress = config.ipAddress;
@@ -52,6 +61,10 @@ export class DataDomeHandler {
 
         this.imagesPromise = new Promise((resolve) => {
             this.resolveImages = resolve;
+        });
+
+        this.challengeScriptPromise = new Promise((resolve) => {
+            this.resolveChallengeScript = resolve;
         });
     }
 
@@ -77,12 +90,15 @@ export class DataDomeHandler {
                     this.userAgent = await page.evaluate(() => navigator.userAgent);
                 }
 
+                const script = await this.challengeScriptFor(this.captchaCapture.interstitialPageText);
+
                 const interstitialResult = await generateInterstitialPayload(this.session, new InterstitialInput(
                     this.userAgent,
                     this.captchaCapture.interstitialPageUrl,
                     this.captchaCapture.interstitialPageText,
                     this.ipAddress,
                     this.acceptLanguage,
+                    script,
                 ));
 
                 if (!interstitialResult) {
@@ -184,6 +200,12 @@ export class DataDomeHandler {
                     return;
                 }
 
+                // Capture the challenge script when the page loads it from its own file
+                if (this.isChallengeScriptRequest(requestUrl)) {
+                    await this.handleChallengeScriptResponse(response, requestUrl);
+                    return;
+                }
+
                 // Handle interstitial page response
                 if (this.isInterstitialPageRequest(requestUrl)) {
                     await this.handleInterstitialPageResponse(response, page);
@@ -221,6 +243,60 @@ export class DataDomeHandler {
      */
     private isInterstitialPageRequest(requestUrl: string): boolean {
         return requestUrl.includes('geo.captcha-delivery.com/interstitial/?initialCid=') && requestUrl.includes('?');
+    }
+
+    /**
+     * Check if this is the challenge script, which DataDome sometimes serves
+     * from its own file rather than inlining it in the challenge page
+     */
+    private isChallengeScriptRequest(requestUrl: string): boolean {
+        return requestUrl.includes('ct.captcha-delivery.com/') && requestUrl.endsWith('.js');
+    }
+
+    /**
+     * Store the challenge script the browser just fetched. The page requests it
+     * itself, so there is no extra network traffic here.
+     */
+    private async handleChallengeScriptResponse(response: any, requestUrl: string): Promise<void> {
+        if (!response.ok()) {
+            return;
+        }
+
+        this.captchaCapture.challengeScriptUrl = requestUrl;
+        this.captchaCapture.challengeScript = await response.text();
+
+        console.log(`[DataDomeHandler] Captured challenge script: ${requestUrl}`);
+
+        this.resolveChallengeScript?.();
+    }
+
+    /**
+     * Resolve the script to send for a challenge page.
+     *
+     * DataDome switches between inlining the challenge script and serving it
+     * from its own file per request. When the page inlines it there is nothing
+     * to send. When it does not, the browser fetches the script itself, so we
+     * wait for that response rather than making our own request.
+     */
+    private async challengeScriptFor(html: string | null): Promise<string | undefined> {
+        if (!html || !parseChallengeScriptUrl(html)) {
+            return undefined;
+        }
+
+        if (!this.captchaCapture.challengeScript) {
+            // The script response normally lands well before the challenge
+            // submits, so this only guards against an unusual ordering.
+            await Promise.race([
+                this.challengeScriptPromise,
+                new Promise<void>((resolve) => setTimeout(resolve, 10000)),
+            ]);
+        }
+
+        if (!this.captchaCapture.challengeScript) {
+            console.warn('[DataDomeHandler] Challenge script was not captured in time');
+        }
+
+        return this.captchaCapture.challengeScript ?? undefined;
     }
 
     /**
@@ -378,6 +454,8 @@ export class DataDomeHandler {
             // Generate device check link
             console.log('[DataDomeHandler] Generating device check link...');
 
+            const script = await this.challengeScriptFor(responseText);
+
             const sliderResult = await generateSliderPayload(this.session, new SliderInput(
                 this.userAgent,
                 this.captchaCapture.captchaPageUrl,
@@ -387,6 +465,7 @@ export class DataDomeHandler {
                 parentUrl,
                 this.ipAddress,
                 this.acceptLanguage,
+                script,
             ));
 
             if (!sliderResult) {
@@ -576,12 +655,18 @@ export class DataDomeHandler {
             captchaPageUrl: null,
             deviceCheckLink: null,
             interstitialPageUrl: null,
-            interstitialPageText: null
+            interstitialPageText: null,
+            challengeScriptUrl: null,
+            challengeScript: null
         };
         this.isProcessing = false;
 
         this.imagesPromise = new Promise((resolve) => {
             this.resolveImages = resolve;
+        });
+
+        this.challengeScriptPromise = new Promise((resolve) => {
+            this.resolveChallengeScript = resolve;
         });
     }
 }
