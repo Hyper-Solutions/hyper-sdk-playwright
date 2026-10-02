@@ -42,6 +42,7 @@ export class AkamaiHandler {
     private ipAddress: string;
     private acceptLanguage: string;
     private sessionContext: string = "";
+    private sbsdContext: string = "";
     private sbsdIndex: number = 0;
 
     // Captured data
@@ -148,8 +149,9 @@ export class AkamaiHandler {
             // Save response text for payload generation
             const buffer = await response.body();
             this.scriptCapture.sbsdResponseText = buffer.toString('utf-8');
-            // Reset index because we're working with a new sbsd script
+            // Reset index and context because we're working with a new sbsd script
             this.sbsdIndex = 0;
+            this.sbsdContext = "";
             console.log('[AkamaiHandler] SBSD response text saved');
         }
     }
@@ -346,15 +348,17 @@ export class AkamaiHandler {
                 bmso,
                 page.url(),
                 this.userAgent,
-                this.scriptCapture.sbsdResponseText,
+                this.sbsdContext == "" ? this.scriptCapture.sbsdResponseText : "", // mutually exclusive
                 this.ipAddress,
-                this.acceptLanguage
+                this.acceptLanguage,
+                this.sbsdContext
             ));
 
+            this.sbsdContext = result.context;
             this.sbsdIndex++;
 
             const modifiedData = JSON.stringify({
-                body: result
+                body: result.payload
             });
 
             console.log('[AkamaiHandler] Continuing SBSD request with SDK-generated data');
@@ -370,10 +374,11 @@ export class AkamaiHandler {
     /**
      * Get current capture status
      */
-    public getStatus(): ScriptCapture & { sessionContext: string; sbsdIndex: number } {
+    public getStatus(): ScriptCapture & { sessionContext: string; sbsdContext: string; sbsdIndex: number } {
         return {
             ...this.scriptCapture,
             sessionContext: this.sessionContext,
+            sbsdContext: this.sbsdContext,
             sbsdIndex: this.sbsdIndex
         };
     }
@@ -390,6 +395,7 @@ export class AkamaiHandler {
             sbsdUuid: null
         };
         this.sessionContext = "";
+        this.sbsdContext = "";
         this.sbsdIndex = 0;
 
         this.scriptSrcPromise = new Promise((resolve) => {
