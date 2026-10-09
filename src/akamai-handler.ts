@@ -44,6 +44,8 @@ export class AkamaiHandler {
     private sessionContext: string = "";
     private sbsdContext: string = "";
     private sbsdIndex: number = 0;
+    // The SBSD script src as the page loaded it (scriptCapture.sbsdScriptUrl drops the v parameter).
+    private sbsdScriptSrc: string | null = null;
 
     // Captured data
     private scriptCapture: ScriptCapture = {
@@ -139,6 +141,9 @@ export class AkamaiHandler {
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
         if (vParam && uuidRegex.test(vParam)) {
+            // The API wants the script's src exactly as the page loaded it, query included
+            this.sbsdScriptSrc = requestUrl;
+
             // Save URL without the v parameter
             url.searchParams.delete('v');
             this.scriptCapture.sbsdScriptUrl = url.toString();
@@ -351,7 +356,8 @@ export class AkamaiHandler {
                 this.sbsdContext == "" ? this.scriptCapture.sbsdResponseText : "", // mutually exclusive
                 this.ipAddress,
                 this.acceptLanguage,
-                this.sbsdContext
+                this.sbsdContext,
+                this.sbsdScriptSrc ?? ""
             ));
 
             this.sbsdContext = result.context;
@@ -397,6 +403,7 @@ export class AkamaiHandler {
         this.sessionContext = "";
         this.sbsdContext = "";
         this.sbsdIndex = 0;
+        this.sbsdScriptSrc = null;
 
         this.scriptSrcPromise = new Promise((resolve) => {
             this.resolveScriptSrc = resolve;
