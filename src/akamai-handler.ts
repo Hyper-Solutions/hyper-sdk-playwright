@@ -43,7 +43,6 @@ export class AkamaiHandler {
     private acceptLanguage: string;
     private sessionContext: string = "";
     private sbsdContext: string = "";
-    private sbsdIndex: number = 0;
     // The SBSD script src as the page loaded it (scriptCapture.sbsdScriptUrl drops the v parameter).
     private sbsdScriptSrc: string | null = null;
 
@@ -154,8 +153,7 @@ export class AkamaiHandler {
             // Save response text for payload generation
             const buffer = await response.body();
             this.scriptCapture.sbsdResponseText = buffer.toString('utf-8');
-            // Reset index and context because we're working with a new sbsd script
-            this.sbsdIndex = 0;
+            // Reset context because we're working with a new sbsd script
             this.sbsdContext = "";
             console.log('[AkamaiHandler] SBSD response text saved');
         }
@@ -315,7 +313,7 @@ export class AkamaiHandler {
 
     /**
      * Handle SBSD request interception, serialized via mutex so concurrent
-     * POSTs don't generate payloads with the same (stale) cookie/index values.
+     * POSTs don't generate payloads with the same (stale) cookie/context values.
      */
     private async handleSbsdRequest(route: any, page: Page, context: BrowserContext): Promise<void> {
         const release = await this.sbsdMutex.acquire();
@@ -341,14 +339,16 @@ export class AkamaiHandler {
             const requestUrl = new URL(route.request().url());
             const hasTimeParameter = requestUrl.searchParams.has('t');
 
-            // Use sbsdIndex 0 if 't' parameter exists, otherwise use current sbsdIndex
-            const indexToUse = hasTimeParameter ? 0 : this.sbsdIndex;
+            // A 't' parameter marks a fingerprint POST, which starts a new chain:
+            // send the script without a context
+            if (hasTimeParameter) {
+                this.sbsdContext = "";
+            }
 
-            console.log(`[AkamaiHandler] Using SBSD index: ${indexToUse} (t parameter: ${hasTimeParameter})`);
+            console.log(`[AkamaiHandler] SBSD ${this.sbsdContext == "" ? "fingerprint" : "event"} payload (t parameter: ${hasTimeParameter})`);
 
             // Generate SBSD payload using SDK
             const result = await generateSbsdPayload(this.session, new SbsdInput(
-                indexToUse,
                 this.scriptCapture.sbsdUuid,
                 bmso,
                 page.url(),
@@ -361,7 +361,6 @@ export class AkamaiHandler {
             ));
 
             this.sbsdContext = result.context;
-            this.sbsdIndex++;
 
             const modifiedData = JSON.stringify({
                 body: result.payload
@@ -380,12 +379,11 @@ export class AkamaiHandler {
     /**
      * Get current capture status
      */
-    public getStatus(): ScriptCapture & { sessionContext: string; sbsdContext: string; sbsdIndex: number } {
+    public getStatus(): ScriptCapture & { sessionContext: string; sbsdContext: string } {
         return {
             ...this.scriptCapture,
             sessionContext: this.sessionContext,
-            sbsdContext: this.sbsdContext,
-            sbsdIndex: this.sbsdIndex
+            sbsdContext: this.sbsdContext
         };
     }
 
@@ -402,7 +400,6 @@ export class AkamaiHandler {
         };
         this.sessionContext = "";
         this.sbsdContext = "";
-        this.sbsdIndex = 0;
         this.sbsdScriptSrc = null;
 
         this.scriptSrcPromise = new Promise((resolve) => {
