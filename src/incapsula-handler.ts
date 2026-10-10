@@ -256,7 +256,7 @@ export class IncapsulaHandler {
         console.log(`[IncapsulaHandler] Request details - UserAgent: ${this.userAgent}, IP: ${this.ipAddress}, ScriptPath: ${scriptPath}`);
 
         await route.continue({
-            postData: result
+            postData: result.payload
         });
     }
 
