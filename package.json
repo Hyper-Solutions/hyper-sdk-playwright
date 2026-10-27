@@ -1,6 +1,6 @@
 {
   "name": "hyper-sdk-playwright",
-  "version": "1.0.0-beta.17",
+  "version": "1.0.0-beta.18",
   "description": "",
   "main": "index.js",
   "types": "index.d.ts",
@@ -12,8 +12,7 @@
     "src/**/*.d.ts",
     "!src/**/*-test.*",
     "README.md",
-    "LICENSE",
-    "prepare.js"
+    "LICENSE"
   ],
   "exports": {
     ".": {
@@ -22,7 +21,6 @@
     }
   },
   "scripts": {
-    "prepare": "node prepare.js",
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
