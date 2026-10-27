@@ -1,5 +1,5 @@
 import {BrowserContext, Page} from "playwright";
-import {Session, generateSensorData, SensorInput, generateSbsdPayload, SbsdInput} from "hyper-sdk-js";
+import {Session, generateSensorData, SensorInput, generateSbsdPayload, SbsdInput, generateTelemetry, TelemetryInput} from "hyper-sdk-js";
 import {Route} from "@playwright/test";
 
 export interface AkamaiHandlerConfig {
@@ -43,7 +43,10 @@ export class AkamaiHandler {
     private acceptLanguage: string;
     private sessionContext: string = "";
     private sbsdContext: string = "";
-    private sbsdIndex: number = 0;
+    // Chains the Akamai-BM-Telemetry headers of the page's protected API calls.
+    private telemetryContext: string = "";
+    // The SBSD script src as the page loaded it (scriptCapture.sbsdScriptUrl drops the v parameter).
+    private sbsdScriptSrc: string | null = null;
 
     // Captured data
     private scriptCapture: ScriptCapture = {
@@ -61,6 +64,7 @@ export class AkamaiHandler {
     // Locks to prevent concurrent sensor/SBSD generation with the same cookies
     private sensorMutex = new AsyncMutex();
     private sbsdMutex = new AsyncMutex();
+    private telemetryMutex = new AsyncMutex();
 
     constructor(config: AkamaiHandlerConfig) {
         this.session = config.session;
@@ -118,6 +122,7 @@ export class AkamaiHandler {
         // and create a fresh promise so any concurrent/queued POST requests
         // will block until the new script content is ready.
         this.sessionContext = "";
+        this.telemetryContext = "";
         this.scriptSrcPromise = new Promise((resolve) => {
             this.resolveScriptSrc = resolve;
         });
@@ -139,6 +144,9 @@ export class AkamaiHandler {
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
         if (vParam && uuidRegex.test(vParam)) {
+            // The API wants the script's src exactly as the page loaded it, query included
+            this.sbsdScriptSrc = requestUrl;
+
             // Save URL without the v parameter
             url.searchParams.delete('v');
             this.scriptCapture.sbsdScriptUrl = url.toString();
@@ -149,8 +157,7 @@ export class AkamaiHandler {
             // Save response text for payload generation
             const buffer = await response.body();
             this.scriptCapture.sbsdResponseText = buffer.toString('utf-8');
-            // Reset index and context because we're working with a new sbsd script
-            this.sbsdIndex = 0;
+            // Reset context because we're working with a new sbsd script
             this.sbsdContext = "";
             console.log('[AkamaiHandler] SBSD response text saved');
         }
@@ -160,6 +167,24 @@ export class AkamaiHandler {
      * Set up request interceptor to replace sensor data
      */
     private async setupRequestInterceptor(page: Page, context: BrowserContext): Promise<void> {
+        // Protected API calls carry an Akamai-BM-Telemetry header instead of a sensor
+        // POST; they can go to any host, so this route matches everything. Routes run
+        // in reverse registration order, so registering it first keeps the sensor,
+        // SBSD and pixel routes below ahead of it.
+        await page.route('**/*', async (route) => {
+            const request = route.request();
+            if (!('akamai-bm-telemetry' in request.headers())) {
+                return route.fallback();
+            }
+
+            try {
+                await this.handleTelemetryRequest(route, page, context);
+            } catch (error) {
+                console.error('Error in telemetry request interceptor:', error);
+                return route.fallback();
+            }
+        });
+
         // Regex pattern for sensor scripts like: https://www.example.com/CKo1/13Fb/v_Lq/cYPX7Q/EiOLQt3r3zrVh4t9/aG4BHUZtAQ/Li/gIKUZfMA0B
         const sensorScriptRegex = /^https?:\/\/[^\/]+\/[a-zA-Z\d\/\-_]+$/i;
 
@@ -175,10 +200,10 @@ export class AkamaiHandler {
                 }
 
                 // Continue with normal request
-                return route.continue();
+                return route.fallback();
             } catch (error) {
                 console.error('Error in sensor request interceptor:', error);
-                return route.continue();
+                return route.fallback();
             }
         });
 
@@ -197,10 +222,10 @@ export class AkamaiHandler {
                 }
 
                 // Continue with normal request
-                return route.continue();
+                return route.fallback();
             } catch (error) {
                 console.error('Error in SBSD request interceptor:', error);
-                return route.continue();
+                return route.fallback();
             }
         });
 
@@ -224,10 +249,10 @@ export class AkamaiHandler {
                 }
 
                 // Continue with normal request for non-POST methods
-                return route.continue();
+                return route.fallback();
             } catch (error) {
                 console.error('Error in pixel endpoint interceptor:', error);
-                return route.continue();
+                return route.fallback();
             }
         });
     }
@@ -309,8 +334,63 @@ export class AkamaiHandler {
     }
 
     /**
+     * Replace the Akamai-BM-Telemetry header of a protected API call with an
+     * SDK-generated one, serialized via mutex so each header chains from the
+     * previous one's context.
+     */
+    private async handleTelemetryRequest(route: Route, page: Page, context: BrowserContext): Promise<void> {
+        const release = await this.telemetryMutex.acquire();
+        try {
+            console.log('[AkamaiHandler] Intercepting request with an Akamai-BM-Telemetry header');
+
+            await this.scriptSrcPromise;
+
+            const cookies = await context.cookies();
+            const abck = cookies.find(c => c.name === '_abck')?.value;
+            const bmsz = cookies.find(c => c.name === 'bm_sz')?.value;
+
+            if (!abck || !bmsz || !this.scriptCapture.scriptSrc) {
+                console.log('[AkamaiHandler] Missing required cookies or script, continuing with original request');
+                return route.fallback();
+            }
+
+            if (!this.userAgent) {
+                this.userAgent = await page.evaluate(() => navigator.userAgent);
+            }
+
+            const headers = route.request().headers();
+            // The page already made the get_params request, and the browser's own
+            // header carries its j, sent as it was returned.
+            const j = headers['akamai-bm-telemetry'].split('&&&').find(p => p.startsWith('j='))?.slice(2) ?? "";
+
+            const result = await generateTelemetry(this.session, new TelemetryInput(
+                abck,
+                bmsz,
+                page.url(),
+                this.userAgent,
+                this.ipAddress,
+                this.acceptLanguage,
+                this.telemetryContext,
+                this.telemetryContext == "" ? this.scriptCapture.scriptSrc : "", // mutually exclusive
+                this.scriptCapture.scriptUrl,
+                j
+            ));
+
+            this.telemetryContext = result.context;
+
+            console.log('[AkamaiHandler] Continuing request with SDK-generated Akamai-BM-Telemetry header');
+
+            await route.fallback({
+                headers: {...headers, 'akamai-bm-telemetry': result.header}
+            });
+        } finally {
+            release();
+        }
+    }
+
+    /**
      * Handle SBSD request interception, serialized via mutex so concurrent
-     * POSTs don't generate payloads with the same (stale) cookie/index values.
+     * POSTs don't generate payloads with the same (stale) cookie/context values.
      */
     private async handleSbsdRequest(route: any, page: Page, context: BrowserContext): Promise<void> {
         const release = await this.sbsdMutex.acquire();
@@ -336,14 +416,16 @@ export class AkamaiHandler {
             const requestUrl = new URL(route.request().url());
             const hasTimeParameter = requestUrl.searchParams.has('t');
 
-            // Use sbsdIndex 0 if 't' parameter exists, otherwise use current sbsdIndex
-            const indexToUse = hasTimeParameter ? 0 : this.sbsdIndex;
+            // A 't' parameter marks a fingerprint POST, which starts a new chain:
+            // send the script without a context
+            if (hasTimeParameter) {
+                this.sbsdContext = "";
+            }
 
-            console.log(`[AkamaiHandler] Using SBSD index: ${indexToUse} (t parameter: ${hasTimeParameter})`);
+            console.log(`[AkamaiHandler] SBSD ${this.sbsdContext == "" ? "fingerprint" : "event"} payload (t parameter: ${hasTimeParameter})`);
 
             // Generate SBSD payload using SDK
             const result = await generateSbsdPayload(this.session, new SbsdInput(
-                indexToUse,
                 this.scriptCapture.sbsdUuid,
                 bmso,
                 page.url(),
@@ -351,11 +433,11 @@ export class AkamaiHandler {
                 this.sbsdContext == "" ? this.scriptCapture.sbsdResponseText : "", // mutually exclusive
                 this.ipAddress,
                 this.acceptLanguage,
-                this.sbsdContext
+                this.sbsdContext,
+                this.sbsdScriptSrc ?? ""
             ));
 
             this.sbsdContext = result.context;
-            this.sbsdIndex++;
 
             const modifiedData = JSON.stringify({
                 body: result.payload
@@ -374,12 +456,12 @@ export class AkamaiHandler {
     /**
      * Get current capture status
      */
-    public getStatus(): ScriptCapture & { sessionContext: string; sbsdContext: string; sbsdIndex: number } {
+    public getStatus(): ScriptCapture & { sessionContext: string; sbsdContext: string; telemetryContext: string } {
         return {
             ...this.scriptCapture,
             sessionContext: this.sessionContext,
             sbsdContext: this.sbsdContext,
-            sbsdIndex: this.sbsdIndex
+            telemetryContext: this.telemetryContext
         };
     }
 
@@ -396,7 +478,8 @@ export class AkamaiHandler {
         };
         this.sessionContext = "";
         this.sbsdContext = "";
-        this.sbsdIndex = 0;
+        this.telemetryContext = "";
+        this.sbsdScriptSrc = null;
 
         this.scriptSrcPromise = new Promise((resolve) => {
             this.resolveScriptSrc = resolve;

@@ -113,7 +113,7 @@ export class DataDomeHandler {
                 });
 
                 // Override extra headers
-                //await page.setExtraHTTPHeaders(interstitialResult.headers);
+                //await page.setExtraHTTPHeaders(interstitialResult.clientHints);
             } else {
                 await route.continue();
             }
@@ -162,7 +162,7 @@ export class DataDomeHandler {
                     console.log('[DataDomeHandler] Successfully generated tags payload');
 
                     await route.continue({
-                        postData: tagsResult,
+                        postData: tagsResult.payload,
                     });
                 } else {
                     await route.continue();
@@ -473,7 +473,7 @@ export class DataDomeHandler {
                 return;
             }
 
-            console.log('[DataDomeHandler] Headers for request interception:', sliderResult.headers);
+            console.log('[DataDomeHandler] Client hints for request interception:', sliderResult.clientHints);
 
             this.captchaCapture.deviceCheckLink = sliderResult.payload;
 
@@ -482,7 +482,7 @@ export class DataDomeHandler {
             console.log('[DataDomeHandler] Captcha solution executed successfully');
 
             // Override extra headers
-            //await page.setExtraHTTPHeaders(sliderResult.headers);
+            //await page.setExtraHTTPHeaders(sliderResult.clientHints);
         } catch (error) {
             console.error('[DataDomeHandler] Error handling captcha page response:', error);
         } finally {
